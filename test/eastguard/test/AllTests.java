@@ -6,6 +6,8 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * JDK-only test runner. Every public no-arg method named {@code test*} on a listed class runs on a fresh
@@ -29,7 +31,15 @@ public final class AllTests {
             HandshakeCodecTest.class,
             TelemetryCodecTest.class,
             NoticeCodecTest.class,
-            PolicyEvaluatorTest.class);
+            PolicyEvaluatorTest.class,
+            WorkloadIdentityTest.class,
+            TlsTest.class,
+            LeaseIssuerTest.class,
+            TokenConfigTest.class,
+            TokenServerTest.class);
+
+    /** Strong reference: java.util.logging only holds loggers weakly, which would drop the level. */
+    private static final Logger QUIET = Logger.getLogger("eastguard");
 
     private AllTests() {
     }
@@ -39,6 +49,10 @@ public final class AllTests {
         assert assertionsEnabled = true;
         if (!assertionsEnabled) {
             System.err.println("WARNING: run with -ea so production assert statements are checked");
+        }
+        // Integration tests start real servers; keep their INFO logs out of the report unless asked for.
+        if (!Boolean.getBoolean("eastguard.testLog")) {
+            QUIET.setLevel(Level.WARNING);
         }
         String filter = args.length > 0 ? args[0] : "";
         int passed = 0;

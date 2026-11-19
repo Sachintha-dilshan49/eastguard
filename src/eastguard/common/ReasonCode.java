@@ -26,9 +26,15 @@ public enum ReasonCode {
     /** Notice reasons: why a restriction was committed or removed. */
     OPERATOR_ACTION(15),
     RISK_SCORE(16),
-    RESTRICTION_EXPIRED(17);
+    RESTRICTION_EXPIRED(17),
+    /**
+     * The verified client certificate does not carry exactly one approved workload URI SAN, or is outside its
+     * validity period (spec §4.1). Distinct from {@link #IDENTITY_DISABLED}: there the SAN mapped to an ID that
+     * is unknown or disabled.
+     */
+    BAD_IDENTITY(18);
 
-    private static final ReasonCode[] BY_CODE = new ReasonCode[18];
+    private static final ReasonCode[] BY_CODE = new ReasonCode[19];
 
     static {
         for (ReasonCode r : values()) {

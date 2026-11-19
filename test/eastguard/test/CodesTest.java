@@ -27,6 +27,7 @@ public final class CodesTest {
         assertEquals(9, ReasonCode.BACKEND_UNAVAILABLE.code());
         assertEquals(10, ReasonCode.THROTTLED.code());
         assertEquals(11, ReasonCode.DECOY_TOUCH.code());
+        assertEquals(18, ReasonCode.BAD_IDENTITY.code());
     }
 
     public void testReasonCodesRoundTripAndAreUnique() throws Exception {
@@ -38,7 +39,7 @@ public final class CodesTest {
     }
 
     public void testUnknownCodesRejected() {
-        for (int bad : new int[] {-1, 18, 255, 256}) {
+        for (int bad : new int[] {-1, 19, 255, 256}) {
             assertThrows(CodecException.class, () -> ReasonCode.fromCode(bad));
         }
         assertThrows(CodecException.class, () -> Verdict.fromCode(3));

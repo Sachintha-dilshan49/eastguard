@@ -32,6 +32,43 @@ Notes:
   `powershell -ExecutionPolicy Bypass -File scripts\sources.ps1`.
 - Clean build: `Remove-Item -Recurse -Force out` then repeat steps 2–3.
 
+The first test run also generates a throwaway test PKI by running `scripts\gen-certs.ps1 -TestFixtures`
+into `out\test-pki` (about 20 s). Later runs reuse it until `out\` is deleted or the certificates are near
+expiry. Pass `-Deastguard.testLog=true` to `java` to see server logs during tests.
+
+## Demo keys and certificates
+
+```powershell
+.\scripts\gen-certs.ps1            # writes keys\ (git-ignored); -Force to regenerate
+```
+
+This uses JDK `keytool` only. It finds keytool via `JAVA_HOME`, then PATH, then the active `java`. It creates a
+demo CA, a separate untrusted CA, PKCS#12 stores for the token service, gateway `app-02`, the control plane, and
+workloads `web-01` / `api-01` (URI SAN `urn:eastguard:workload:<id>`), a `web-01` look-alike signed by the
+untrusted CA, and the Ed25519 lease-signing key `lease-k1`.
+
+Passwords never appear on a command line or in the output:
+
+| Store | Environment variable | Fallback file (created if missing) |
+|-------|----------------------|------------------------------------|
+| Runtime TLS stores + trust store | `EASTGUARD_STORE_PASS` | `keys\store.pass` |
+| Lease signer | `EASTGUARD_SIGNER_PASS` | `keys\signer.pass` |
+| CA stores (`keys\ca\`, used only by the script) | `EASTGUARD_CA_PASS` | `keys\ca\ca.pass` |
+
+## Token service and M2 demo
+
+```powershell
+java -cp out eastguard.demos.DemoM2_Tls
+java -cp out eastguard.tokensvc.TokenServer --config config/token.properties.example
+```
+
+`DemoM2_Tls` starts its own token service on an ephemeral port. It shows `web-01` getting a lease bound to its
+certificate and IP, `api-01` being denied (no approved edge), the untrusted-CA certificate failing the TLS
+handshake, and tampered leases being rejected by the gateway's verifier. It exits 0 when every check passes.
+
+Until the control plane exists (Task 6), the token service reads its policy from the `bootstrap.*` keys of its
+config file. See `docs/DEVIATIONS.md`.
+
 ## Writing tests
 
 Tests use a JDK-only runner, no JUnit.

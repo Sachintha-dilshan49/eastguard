@@ -1,9 +1,12 @@
+src/eastguard/client/EastGuardClient.java
 src/eastguard/common/Alert.java
 src/eastguard/common/AlertStatus.java
+src/eastguard/common/BootstrapState.java
 src/eastguard/common/Bytes.java
 src/eastguard/common/CandidateEdge.java
 src/eastguard/common/Cidr.java
 src/eastguard/common/CodecException.java
+src/eastguard/common/Config.java
 src/eastguard/common/Ed25519.java
 src/eastguard/common/Edge.java
 src/eastguard/common/Endpoint.java
@@ -15,6 +18,7 @@ src/eastguard/common/Ids.java
 src/eastguard/common/IpAddress.java
 src/eastguard/common/IssuerReply.java
 src/eastguard/common/IssuerRequest.java
+src/eastguard/common/KeyStores.java
 src/eastguard/common/LearningDraft.java
 src/eastguard/common/Lease.java
 src/eastguard/common/LeaseCodec.java
@@ -31,6 +35,7 @@ src/eastguard/common/Preamble.java
 src/eastguard/common/ReasonCode.java
 src/eastguard/common/ReplyStatus.java
 src/eastguard/common/Restriction.java
+src/eastguard/common/SecretSource.java
 src/eastguard/common/Selector.java
 src/eastguard/common/SelectorType.java
 src/eastguard/common/Service.java
@@ -42,6 +47,13 @@ src/eastguard/common/Verdict.java
 src/eastguard/common/WireReader.java
 src/eastguard/common/WireWriter.java
 src/eastguard/common/Workload.java
+src/eastguard/common/WorkloadIdentity.java
+src/eastguard/demos/DemoM2_Tls.java
+src/eastguard/tokensvc/IssueLimiter.java
+src/eastguard/tokensvc/LeaseIssuer.java
+src/eastguard/tokensvc/TlsContextFactory.java
+src/eastguard/tokensvc/TokenConfig.java
+src/eastguard/tokensvc/TokenServer.java
 test/eastguard/test/AllTests.java
 test/eastguard/test/Assert.java
 test/eastguard/test/CidrTest.java
@@ -51,8 +63,14 @@ test/eastguard/test/DomainTest.java
 test/eastguard/test/Fixtures.java
 test/eastguard/test/HandshakeCodecTest.java
 test/eastguard/test/LeaseCodecTest.java
+test/eastguard/test/LeaseIssuerTest.java
 test/eastguard/test/NoticeCodecTest.java
 test/eastguard/test/PolicyEvaluatorTest.java
 test/eastguard/test/SmokeTest.java
 test/eastguard/test/TelemetryCodecTest.java
+test/eastguard/test/TestPki.java
+test/eastguard/test/TlsTest.java
+test/eastguard/test/TokenConfigTest.java
+test/eastguard/test/TokenServerTest.java
 test/eastguard/test/WireTest.java
+test/eastguard/test/WorkloadIdentityTest.java
