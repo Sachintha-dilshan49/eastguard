@@ -1,0 +1,24 @@
+# Build output
+out/
+*.class
+
+# Secrets and generated keys — never commit
+*.p12
+*.jks
+*.key
+*.pem
+keys/
+config/*.properties
+!config/*.properties.example
+
+# Runtime state
+journal/
+*.journal
+*.log
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
