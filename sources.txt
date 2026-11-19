@@ -1,0 +1,10 @@
+src/eastguard/common/Bytes.java
+src/eastguard/common/CodecException.java
+src/eastguard/common/Ids.java
+src/eastguard/common/IpAddress.java
+src/eastguard/common/WireReader.java
+src/eastguard/common/WireWriter.java
+test/eastguard/test/AllTests.java
+test/eastguard/test/Assert.java
+test/eastguard/test/SmokeTest.java
+test/eastguard/test/WireTest.java
