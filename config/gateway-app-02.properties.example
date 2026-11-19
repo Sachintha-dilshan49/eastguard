@@ -1,0 +1,42 @@
+# EastGuard NIO gateway for service app-02 (spec §4.3, §9.1).
+# Copy to config/gateway-app-02.properties (git-ignored) to customise. No secrets here: the store password
+# comes from the environment variable below, else from the git-ignored file scripts/gen-certs.ps1 creates.
+# Paths are relative to the working directory (the project root). Start the backend first:
+#
+#   java -cp out eastguard.demos.EchoBackend 127.0.0.1:7002
+#   java -cp out eastguard.gateway.NioGateway --config config/gateway-app-02.properties.example
+
+gateway.service=app-02
+listen=127.0.0.1:9002
+backend=127.0.0.1:7002
+decoy.listen=127.0.0.1:9003
+decoy.id=decoy-9003
+
+# --- TLS (mTLS, TLS 1.3 only) ---
+tls.keyStore=keys/gateway-app-02.p12
+tls.trustStore=keys/truststore.p12
+tls.passwordEnv=EASTGUARD_STORE_PASS
+tls.passwordFile=keys/store.pass
+
+# --- Deadlines (milliseconds) ---
+limits.handshakeMillis=5000
+limits.preambleMillis=2000
+limits.backendConnectMillis=2000
+limits.idleMillis=60000
+limits.maxSessionMillis=300000
+
+# --- Resource limits ---
+limits.maxConnections=2048
+limits.maxConnectionsPerPeer=1024
+limits.maxHandshakes=256
+limits.bufferBudgetBytes=268435456
+limits.relayBufferBytes=32768
+limits.highWaterBytes=24576
+limits.lowWaterBytes=8192
+limits.tlsTaskThreads=2
+limits.commandQueue=1024
+limits.backlog=512
+limits.maxAcceptsPerEvent=64
+
+# --- Enforcement state: the token service's static bootstrap. Replaced by control-plane sync in Task 6. ---
+bootstrap.file=config/token.properties.example

@@ -69,6 +69,34 @@ handshake, and tampered leases being rejected by the gateway's verifier. It exit
 Until the control plane exists (Task 6), the token service reads its policy from the `bootstrap.*` keys of its
 config file. See `docs/DEVIATIONS.md`.
 
+## NIO gateway and M1 demo
+
+```powershell
+java -cp out eastguard.demos.DemoM1_Nio          # optional arg: session count (default 500)
+
+# Or run the pieces by hand (backend first):
+java -cp out eastguard.demos.EchoBackend 127.0.0.1:7002
+java -cp out eastguard.gateway.NioGateway --config config/gateway-app-02.properties.example
+```
+
+`DemoM1_Nio` starts the echo backend on its fixed port `127.0.0.1:7002` (it fails if that port is busy), and a
+token service and gateway `app-02` on ephemeral ports. It then:
+
+1. opens 500 concurrent `web-01` sessions on one lease and prints the gateway-owned thread count (one selector
+   plus two TLS task threads) and admission latency;
+2. shows `api-01` (no approved edge) refused by the token service, then refused by the gateway when it presents a
+   validly signed lease or replays `web-01`'s lease;
+3. pushes 16 MiB through a slow reader, printing in-flight bytes, gateway queue and read pauses;
+4. touches the decoy port.
+
+It exits 0 when every check passes.
+
+The gateway is one selector thread with an explicit per-connection state machine
+(`TLS_HANDSHAKE → READ_PREAMBLE → AUTHORIZE → CONNECT_BACKEND → WRITE_REPLY → RELAY → CLOSED`). It sends ALLOW
+only after the backend connect succeeds and a second authorization check passes. Deadlines and limits are the
+`limits.*` keys in the gateway config, with spec §9.1 defaults. Until Task 6, the gateway reads the token
+service's bootstrap state through `bootstrap.file`. See `docs/DEVIATIONS.md` (Task 5).
+
 ## Writing tests
 
 Tests use a JDK-only runner, no JUnit.
