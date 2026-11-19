@@ -20,7 +20,16 @@ public final class AllTests {
     /** Register new test classes here. */
     private static final List<Class<?>> TEST_CLASSES = List.of(
             SmokeTest.class,
-            WireTest.class);
+            WireTest.class,
+            CodesTest.class,
+            CidrTest.class,
+            CryptoTest.class,
+            DomainTest.class,
+            LeaseCodecTest.class,
+            HandshakeCodecTest.class,
+            TelemetryCodecTest.class,
+            NoticeCodecTest.class,
+            PolicyEvaluatorTest.class);
 
     private AllTests() {
     }
