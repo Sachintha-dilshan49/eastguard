@@ -116,7 +116,9 @@ public final class WireTest {
         assertEquals(16, IpAddress.parse("::1").length());
         assertEquals("10.0.0.1", IpAddress.parse("10.0.0.1").toString());
         for (String bad : new String[] {"", "1.2.3", "1.2.3.4.5", "256.1.1.1", "01.2.3.4", "1..3.4",
-                "localhost", "example.com", "fe80::1%eth0", "zz::1", "1::2::3", " 1.2.3.4"}) {
+                "localhost", "example.com", "fe80::1%eth0", "zz::1", "1::2::3", " 1.2.3.4",
+                // Leading '.' would reach the system resolver inside InetAddress.getByName.
+                ".:1", "..::"}) {
             assertThrows(IllegalArgumentException.class, () -> IpAddress.parse(bad));
         }
     }

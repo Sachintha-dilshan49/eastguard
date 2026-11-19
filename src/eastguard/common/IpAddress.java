@@ -54,8 +54,13 @@ public final class IpAddress implements Serializable {
                 throw new IllegalArgumentException("invalid ip literal");
             }
         }
+        // InetAddress only skips name resolution when the first character is a hex digit or ':'. Anything else
+        // (e.g. ".:1") would be handed to the system resolver, so reject it here.
+        if (literal.charAt(0) == '.') {
+            throw new IllegalArgumentException("invalid ip literal");
+        }
         try {
-            // A string containing ':' and only hex/':'/'.' is parsed as an IPv6 literal; no lookup happens.
+            // Starts with a hex digit or ':' and contains ':': parsed as an IPv6 literal, never looked up.
             return of(InetAddress.getByName(literal));
         } catch (UnknownHostException e) {
             throw new IllegalArgumentException("invalid ip literal");
