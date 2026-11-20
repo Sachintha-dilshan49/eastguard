@@ -11,11 +11,14 @@ import eastguard.common.Peer;
 import eastguard.common.PolicyEvaluator;
 import eastguard.common.Preamble;
 import eastguard.common.ReasonCode;
+import eastguard.common.TelemetrySender;
 import eastguard.common.ReplyStatus;
 import eastguard.common.Selector;
 import eastguard.common.SignedLease;
 import eastguard.common.Verdict;
 import eastguard.common.WorkloadIdentity;
+import eastguard.control.ControlClient;
+import eastguard.control.StateSync;
 import eastguard.gateway.ChannelPair.State;
 import eastguard.tokensvc.TlsContextFactory;
 import java.io.IOException;
@@ -133,6 +136,7 @@ public final class NioGateway implements AutoCloseable {
     private final ConcurrentLinkedQueue<ChannelPair> tasksDone = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean reevaluateRequested = new AtomicBoolean();
     private DecoyListener decoy;
+    private final List<AutoCloseable> owned = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     // Selector-thread state.
     private java.nio.channels.Selector selector;
@@ -219,13 +223,23 @@ public final class NioGateway implements AutoCloseable {
     /** Builds a gateway from configuration, with its own TLS context and the bootstrap state (Task 6 replaces it). */
     public static NioGateway create(GatewayConfig cfg, Clock clock, DecisionSink sink) {
         SSLContext ctx = TlsContextFactory.create(cfg.tls());
-        EnforcementView view = EnforcementView.fresh(cfg.bootstrap());
+        // State comes from the control plane over RMI on a background thread, never on the selector.
+        ControlClient control = new ControlClient(cfg.control(), ctx);
+        StateSync sync = new StateSync("gateway-" + cfg.serviceId(), control::sync, cfg.sync(), System::nanoTime);
         NioGateway g = new NioGateway(cfg.serviceId(), ctx, cfg.listen().toSocketAddress(),
-                cfg.backend().toSocketAddress(), () -> view, clock, cfg.limits(), sink, BackendConnector.DIRECT);
+                cfg.backend().toSocketAddress(), sync, clock, cfg.limits(), sink, BackendConnector.DIRECT);
         if (cfg.decoyListen() != null) {
             g.enableDecoy(cfg.decoyId(), cfg.decoyListen().toSocketAddress());
         }
+        sync.addListener(g::reevaluate); // removed edges, quarantines and revocations close matching sessions
+        g.closeWith(sync);
+        sync.start();
         return g;
+    }
+
+    /** Closes {@code resource} (e.g. the state sync) when this gateway closes. */
+    public void closeWith(AutoCloseable resource) {
+        owned.add(Objects.requireNonNull(resource, "resource"));
     }
 
     /** Adds an accept-and-close decoy listener served by the same selector. Call before {@link #start()}. */
@@ -857,18 +871,16 @@ public final class NioGateway implements AutoCloseable {
     }
 
     private void sweep(long now) {
-        EnforcementView view = state.get();
-        boolean usable = view.usable();
+        if (!state.get().usable() && index.size() > 0) {
+            // Fail closed (spec §6.2 step 4): once freshness has expired, end every live and pending session.
+            terminateAll(index.all(), ReasonCode.NOT_READY);
+        }
         long q = 0;
         for (ChannelPair p : new ArrayList<>(pairs)) {
             if (p.state == State.CLOSED) {
                 continue;
             }
             q += p.queuedBytes();
-            if (!usable && p.indexed) {
-                terminate(p, ReasonCode.NOT_READY); // fail closed: stale state ends live sessions (spec §6.2)
-                continue;
-            }
             switch (p.state) {
                 case TLS_HANDSHAKE -> expire(p, now - p.deadline >= 0, handshakeTimeouts);
                 case READ_PREAMBLE -> expire(p, now - p.deadline >= 0, preambleTimeouts);
@@ -1025,6 +1037,9 @@ public final class NioGateway implements AutoCloseable {
             }
         }
         tlsTasks.shutdownNow();
+        for (AutoCloseable r : owned) {
+            closeQuietly(r);
+        }
     }
 
     private static void closeQuietly(AutoCloseable c) {
@@ -1043,8 +1058,20 @@ public final class NioGateway implements AutoCloseable {
             System.err.println("usage: java -cp out eastguard.gateway.NioGateway --config config/gateway-app-02.properties");
             System.exit(2);
         }
-        CountingDecisionSink sink = new CountingDecisionSink();
-        NioGateway g = create(GatewayConfig.load(Path.of(args[1])), Clock.systemUTC(), sink);
+        GatewayConfig cfg = GatewayConfig.load(Path.of(args[1]));
+        DecisionSink sink = new CountingDecisionSink();
+        TelemetrySender telemetry = null;
+        if (cfg.telemetry() != null) {
+            telemetry = TelemetrySender.create(cfg.sync().clusterId(), cfg.telemetry());
+            telemetry.start();
+            sink = DecisionSink.udp(telemetry);
+        } else {
+            LOG.warning("telemetry.collector is not configured: decisions are only counted locally");
+        }
+        NioGateway g = create(cfg, Clock.systemUTC(), sink);
+        if (telemetry != null) {
+            g.closeWith(telemetry);
+        }
         Runtime.getRuntime().addShutdownHook(new Thread(g::close, "gateway-shutdown"));
         g.start();
     }

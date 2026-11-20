@@ -1,0 +1,24 @@
+# EastGuard initial enforcement state (spec §9.1): written into the control-plane journal ONCE, by the explicit
+# administrator bootstrap command. After that, the journal is authoritative and this file is not read again.
+#
+#   java -cp out eastguard.control.ControlPlaneImpl bootstrap --config config/control.properties.example ^
+#        --state config/bootstrap.properties.example --reason "initial deny-by-default policy"
+#
+# Deny by default: only the edges listed here are approved. Start with a minimal policy (spec §9.3).
+
+cluster.id=eg-demo
+lease.defaultSeconds=60
+
+bootstrap.revision=1
+bootstrap.mode=ENFORCE
+bootstrap.workloads=web-01,api-01
+bootstrap.services=app-02
+bootstrap.service.app-02.gateway=app-02
+bootstrap.service.app-02.listener=127.0.0.1:9002
+bootstrap.service.app-02.serverName=127.0.0.1
+bootstrap.service.app-02.backend=127.0.0.1:7002
+bootstrap.edges=web-01>app-02
+bootstrap.pilot.sources=
+bootstrap.pilot.services=
+bootstrap.tokenKeys=lease-k1
+bootstrap.tokenKey.lease-k1.cert=keys/lease-k1.cer

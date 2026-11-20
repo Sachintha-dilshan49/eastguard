@@ -65,7 +65,7 @@ public final class TokenServerTest {
     }
 
     private TokenServer start(int maxConcurrent, Duration deadline) throws IOException {
-        LeaseIssuer issuer = new LeaseIssuer(new PolicyEvaluator(clock), "lease-k1", TestPki.leaseSigningKey(),
+        LeaseIssuer issuer = new LeaseIssuer(new PolicyEvaluator(clock), "lease-k1", TestPki.leaseSigningKey(), TestPki.leaseVerifyKey(),
                 new IssueLimiter(1_000, System::nanoTime), clock, new SecureRandom());
         TokenServer server = new TokenServer(TestPki.context("tokensvc"),
                 new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), state::get, issuer,
@@ -146,6 +146,53 @@ public final class TokenServerTest {
             assertEquals(0, noEdge.token().length());
             assertEquals(ReplyStatus.DENY, client("workload-web-01", server).requestLease("db-09").status());
             assertEquals(2, server.stats().denied());
+        }
+    }
+
+    /** Spec §1 "selected token-service denials": policy deny for a known service and quarantine, nothing else. */
+    public void testSelectedDenialsReportedOverUdp() throws Exception {
+        try (java.net.DatagramSocket collector = new java.net.DatagramSocket(new InetSocketAddress(
+                InetAddress.getLoopbackAddress(), 0))) {
+            collector.setSoTimeout(300);
+            LeaseIssuer issuer = new LeaseIssuer(new PolicyEvaluator(clock), "lease-k1", TestPki.leaseSigningKey(),
+                    TestPki.leaseVerifyKey(), new IssueLimiter(1_000, System::nanoTime), clock, new SecureRandom());
+            TokenServer server = new TokenServer(TestPki.context("tokensvc"),
+                    new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), state::get, issuer,
+                    new TokenServer.Limits(8, Duration.ofSeconds(5), 16));
+            server.reportTo(new eastguard.common.TelemetrySender("eg-test", "tokensvc", "tk1", TelemetryProducerTest.KEY,
+                    (InetSocketAddress) collector.getLocalSocketAddress(), 16, new SecureRandom()), clock);
+            server.start();
+            try (server) {
+                client("workload-web-01", server).requestLease("app-02");   // issued: not reported
+                client("workload-api-01", server).requestLease("app-02");   // policy deny, known service
+                client("workload-web-01", server).requestLease("db-09");    // unknown service: not reported
+                Restriction q = new Restriction(Selector.identity("web-01"), ReasonCode.OPERATOR_ACTION, "operator",
+                        Instant.now(), Instant.now().plusSeconds(300), REVISION);
+                state.set(EnforcementView.fresh(snapshot(List.of(q))));
+                client("workload-web-01", server).requestLease("app-02");   // quarantined
+                state.set(EnforcementView.NOT_READY);
+                client("workload-web-01", server).requestLease("app-02");   // infrastructure: not reported
+                List<eastguard.common.Telemetry> got = new java.util.ArrayList<>();
+                byte[] buf = new byte[eastguard.common.TelemetryCodec.RECEIVE_BUFFER];
+                while (true) {
+                    java.net.DatagramPacket p = new java.net.DatagramPacket(buf, buf.length);
+                    try {
+                        collector.receive(p);
+                    } catch (java.net.SocketTimeoutException e) {
+                        break;
+                    }
+                    got.add(eastguard.common.TelemetryCodec.decode(buf, 0, p.getLength(), "eg-test",
+                            (producer, keyId) -> TelemetryProducerTest.KEY));
+                }
+                assertEquals(2, got.size());
+                assertEquals("api-01", got.get(0).sourceIdentity());
+                assertEquals(ReasonCode.POLICY_DENY, got.get(0).reason());
+                assertTrue(got.get(0).outsideApprovedGraph(), "policy deny carries flag bit 0");
+                assertEquals(server.port(), got.get(0).dstPort());
+                assertEquals("web-01", got.get(1).sourceIdentity());
+                assertEquals(ReasonCode.QUARANTINED, got.get(1).reason());
+                assertEquals(got.get(0).seq() + 1, got.get(1).seq());
+            }
         }
     }
 

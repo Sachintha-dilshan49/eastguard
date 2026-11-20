@@ -1,0 +1,47 @@
+# EastGuard control plane (spec §7.1, §7.2, §9.1).
+# Copy to config/control.properties (git-ignored) to customise. No secrets here: the store password comes from
+# the environment variable below, else the git-ignored keys\store.pass; API credentials are stored as digests in
+# the git-ignored file named by credentials.file (scripts/gen-credentials.ps1).
+#
+#   java -cp out eastguard.control.ControlPlaneImpl bootstrap --config config/control.properties.example ^
+#        --state config/bootstrap.properties.example --reason "initial deny-by-default policy"
+#   java -cp out eastguard.control.ControlPlaneImpl --config config/control.properties.example
+
+cluster.id=eg-demo
+
+# --- RMI: fixed ports, one numeric address (also advertised in stubs), TLS 1.3 + client auth on both ---
+rmi.host=127.0.0.1
+rmi.registryPort=1099
+rmi.objectPort=1100
+
+tls.keyStore=keys/control.p12
+tls.trustStore=keys/truststore.p12
+tls.passwordEnv=EASTGUARD_STORE_PASS
+tls.passwordFile=keys/store.pass
+
+# --- Durable state (journal/ is git-ignored). Exclusive lock; forced to disk before every acknowledgement. ---
+journal.file=journal/control.journal
+
+# --- Per-principal API credentials (digests + roles); reloaded when the file changes ---
+credentials.file=keys/control-credentials.properties
+
+# --- Limits ---
+quarantine.maxTtlSeconds=86400
+audit.retainedEntries=10000
+
+# --- Detector automation (spec §6.1): alert-only until enabled here AND in the detector configuration ---
+automation.leaseReduction=false
+automation.quarantine=false
+# Newly issued leases under a risk lease reduction (spec §9.1 lease.stepUpSeconds).
+lease.stepUpSeconds=10
+# Longest expiry of an automatic action (default automatic quarantine TTL is 5 min) and actions per rolling hour.
+automation.maxActionTtlSeconds=300
+automation.maxActionsPerHour=20
+# Never acted on automatically.
+automation.protectedIdentities=
+# An IP selector must be inside an eligible range and outside every excluded (shared/NAT or infrastructure) range.
+automation.eligibleCidrs=10.0.0.0/8,127.0.0.0/8
+automation.excludedCidrs=10.0.99.0/24,10.0.0.0/28
+
+# --- Learning draft (in memory; candidates beyond this are dropped and counted) ---
+learning.maxCandidates=10000

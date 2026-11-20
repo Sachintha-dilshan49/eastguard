@@ -86,10 +86,12 @@ public final class DemoM1_Nio {
         CountingDecisionSink sink = new CountingDecisionSink();
         int platformThreadsBefore = platformThreads();
 
+        EnforcementSnapshot boot = eastguard.common.BootstrapState.snapshot(eastguard.common.Config.load(Path.of("config/bootstrap.properties.example")));
         try (EchoBackend echo = new EchoBackend(gcfg.backend().toSocketAddress(), 4_096).start();
-                TokenServer issuerServer = TokenServer.create(tcfg, clock, new InetSocketAddress(lo, 0))) {
+                TokenServer issuerServer = TokenServer.create(tcfg, clock, new InetSocketAddress(lo, 0),
+                        () -> EnforcementView.fresh(boot))) {
             issuerServer.start();
-            EnforcementSnapshot boot = gcfg.bootstrap();
+
             NioGateway gw = new NioGateway(gcfg.serviceId(), TlsContextFactory.create(gcfg.tls()),
                     new InetSocketAddress(lo, 0), gcfg.backend().toSocketAddress(), () -> EnforcementView.fresh(boot),
                     clock, gcfg.limits(), sink, BackendConnector.DIRECT);

@@ -198,6 +198,23 @@ public final class Config {
         }
     }
 
+    /** Comma-separated CIDRs; absent or blank means empty. */
+    public List<Cidr> cidrList(String key) {
+        String v = optional(key);
+        List<Cidr> out = new ArrayList<>();
+        if (v == null) {
+            return out;
+        }
+        for (String part : v.split(",", -1)) {
+            try {
+                out.add(Cidr.parse(part.strip()));
+            } catch (IllegalArgumentException e) {
+                throw invalid(key, "must be comma-separated CIDRs such as 10.0.0.0/24");
+            }
+        }
+        return out;
+    }
+
     /** Fails if the file has keys that no accessor asked for. Call after reading everything. */
     public void requireNoUnknownKeys() {
         Set<String> unknown = new TreeSet<>(props.stringPropertyNames());

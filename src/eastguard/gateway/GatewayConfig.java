@@ -1,11 +1,12 @@
 package eastguard.gateway;
 
-import eastguard.common.BootstrapState;
 import eastguard.common.Config;
 import eastguard.common.Endpoint;
-import eastguard.common.EnforcementSnapshot;
 import eastguard.common.Ids;
 import eastguard.common.SecretSource;
+import eastguard.common.TelemetrySender;
+import eastguard.control.ControlClient;
+import eastguard.control.StateSync;
 import eastguard.tokensvc.TlsContextFactory;
 import java.nio.file.Path;
 import java.util.Objects;
@@ -14,22 +15,23 @@ import java.util.Objects;
  * Gateway configuration (spec §9.1), see {@code config/gateway-app-02.properties.example}.
  *
  * <pre>
+ * cluster.id=eg-demo
  * gateway.service=app-02                 fixed service ID: the only lease audience this gateway accepts
  * listen=127.0.0.1:9002                  workload-facing mTLS listener
  * backend=127.0.0.1:7002                 fixed private backend (numeric; never resolved)
  * decoy.listen=127.0.0.1:9003            optional accept-and-close decoy
  * decoy.id=decoy-9003                    telemetry service ID for decoy hits (default "decoy")
- * tls.keyStore, tls.trustStore, tls.passwordEnv, tls.passwordFile    as for the token service
+ * tls.keyStore, tls.trustStore, tls.passwordEnv, tls.passwordFile    as for the token service; the same
+ *                                        certificate is the gateway's RMI client identity
+ * control.*                              see {@link ControlClient.Settings}
+ * state.pollMillis, state.maxAgeMillis   see {@link StateSync.Settings}
  * limits.*                               see {@link GatewayLimits}
- * bootstrap.file=config/token.properties.example
+ * telemetry.*                            optional UDP producer, see {@link TelemetrySender.Settings}
  * </pre>
- *
- * Until control-plane sync exists (Task 6) the gateway uses the same static bootstrap snapshot as the token
- * service: {@code bootstrap.file} names a file whose {@code cluster.id}, {@code lease.defaultSeconds} and
- * {@code bootstrap.*} keys are read by {@link BootstrapState}. The configured service must exist in it.
  */
 public record GatewayConfig(String serviceId, Endpoint listen, Endpoint backend, Endpoint decoyListen, String decoyId,
-        TlsContextFactory.Material tls, GatewayLimits limits, EnforcementSnapshot bootstrap) {
+        TlsContextFactory.Material tls, GatewayLimits limits, ControlClient.Settings control, StateSync.Settings sync,
+        TelemetrySender.Settings telemetry) {
 
     public GatewayConfig {
         Ids.require(serviceId, "serviceId");
@@ -38,10 +40,8 @@ public record GatewayConfig(String serviceId, Endpoint listen, Endpoint backend,
         Ids.require(decoyId, "decoyId");
         Objects.requireNonNull(tls, "tls");
         Objects.requireNonNull(limits, "limits");
-        Objects.requireNonNull(bootstrap, "bootstrap");
-        if (!bootstrap.services().containsKey(serviceId)) {
-            throw new IllegalArgumentException("bootstrap state has no service '" + serviceId + "'");
-        }
+        Objects.requireNonNull(control, "control");
+        Objects.requireNonNull(sync, "sync");
     }
 
     public static GatewayConfig load(Path file) {
@@ -58,8 +58,10 @@ public record GatewayConfig(String serviceId, Endpoint listen, Endpoint backend,
                 new SecretSource(c.string("tls.passwordEnv", "EASTGUARD_STORE_PASS"),
                         c.path("tls.passwordFile", "keys/store.pass")));
         GatewayLimits limits = GatewayLimits.from(c);
-        EnforcementSnapshot bootstrap = BootstrapState.snapshot(Config.load(c.path("bootstrap.file")));
+        ControlClient.Settings control = ControlClient.Settings.from(c);
+        StateSync.Settings sync = StateSync.Settings.from(c);
+        TelemetrySender.Settings telemetry = TelemetrySender.Settings.from(c); // null: no collector
         c.requireNoUnknownKeys();
-        return new GatewayConfig(service, listen, backend, decoy, decoyId, tls, limits, bootstrap);
+        return new GatewayConfig(service, listen, backend, decoy, decoyId, tls, limits, control, sync, telemetry);
     }
 }

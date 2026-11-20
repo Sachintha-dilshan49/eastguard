@@ -136,6 +136,48 @@ public final class WireReader {
         return IpAddress.of(b);
     }
 
+    public Selector selector() throws CodecException {
+        SelectorType type = SelectorType.fromCode(u8());
+        return switch (type) {
+            case IDENTITY -> Selector.identity(id());
+            case IP -> Selector.ip(ip());
+        };
+    }
+
+    /** {@code u16 length | UTF-8}, at most {@code maxBytes}; malformed UTF-8 is rejected, not replaced. */
+    public String text(int maxBytes) throws CodecException {
+        int len = u16();
+        if (len > maxBytes) {
+            throw new CodecException("text too long");
+        }
+        byte[] b = raw(len);
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(b)).toString();
+        } catch (java.nio.charset.CharacterCodingException e) {
+            throw new CodecException("invalid UTF-8");
+        }
+    }
+
+    public boolean bool() throws CodecException {
+        int v = u8();
+        if (v > 1) {
+            throw new CodecException("invalid boolean");
+        }
+        return v == 1;
+    }
+
+    /** A count prefix (u16) that must not exceed {@code max}. */
+    public int count(int max) throws CodecException {
+        int n = u16();
+        if (n > max) {
+            throw new CodecException("count out of range");
+        }
+        return n;
+    }
+
     public void end() throws CodecException {
         if (pos != end) {
             throw new CodecException("trailing bytes");

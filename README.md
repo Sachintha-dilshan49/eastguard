@@ -43,8 +43,9 @@ expiry. Pass `-Deastguard.testLog=true` to `java` to see server logs during test
 ```
 
 This uses JDK `keytool` only. It finds keytool via `JAVA_HOME`, then PATH, then the active `java`. It creates a
-demo CA, a separate untrusted CA, PKCS#12 stores for the token service, gateway `app-02`, the control plane, and
-workloads `web-01` / `api-01` (URI SAN `urn:eastguard:workload:<id>`), a `web-01` look-alike signed by the
+demo CA, a separate untrusted CA, PKCS#12 stores for the token service, gateway `app-02`, the control plane, the
+threat detector, and workloads `web-01` / `api-01` (URI SAN `urn:eastguard:workload:<id>`), a `web-01`
+look-alike signed by the
 untrusted CA, and the Ed25519 lease-signing key `lease-k1`.
 
 Passwords never appear on a command line or in the output:
@@ -66,8 +67,8 @@ java -cp out eastguard.tokensvc.TokenServer --config config/token.properties.exa
 certificate and IP, `api-01` being denied (no approved edge), the untrusted-CA certificate failing the TLS
 handshake, and tampered leases being rejected by the gateway's verifier. It exits 0 when every check passes.
 
-Until the control plane exists (Task 6), the token service reads its policy from the `bootstrap.*` keys of its
-config file. See `docs/DEVIATIONS.md`.
+`DemoM2_Tls` uses `config/bootstrap.properties.example` as a fixed fixture. A standalone token service gets its state
+from the control plane (see "Control plane and M5 demo").
 
 ## NIO gateway and M1 demo
 
@@ -94,8 +95,78 @@ It exits 0 when every check passes.
 The gateway is one selector thread with an explicit per-connection state machine
 (`TLS_HANDSHAKE → READ_PREAMBLE → AUTHORIZE → CONNECT_BACKEND → WRITE_REPLY → RELAY → CLOSED`). It sends ALLOW
 only after the backend connect succeeds and a second authorization check passes. Deadlines and limits are the
-`limits.*` keys in the gateway config, with spec §9.1 defaults. Until Task 6, the gateway reads the token
-service's bootstrap state through `bootstrap.file`. See `docs/DEVIATIONS.md` (Task 5).
+`limits.*` keys in the gateway config, with spec §9.1 defaults. `DemoM1_Nio` uses the bootstrap file as a fixed
+fixture; a standalone gateway syncs its state from the control plane. See `docs/DEVIATIONS.md` (Task 5).
+
+## Control plane and M5 demo
+
+```powershell
+.\scripts\gen-credentials.ps1      # once: per-principal API secrets in keys\api\, digests in keys\control-credentials.properties
+java -cp out eastguard.demos.DemoM5_Rmi
+```
+
+`DemoM5_Rmi` runs every component in one JVM with the production wiring and the example configs. The control
+plane listens on 127.0.0.1:1099/1100 with a fresh journal under `out\demo-m5`. The token service and gateway
+`app-02` sync over RMI, and the echo backend listens on 127.0.0.1:7002. The demo then:
+
+1. makes an audited policy edit (`api-01` → `app-02`);
+2. sends a stale edit, which gets CONFLICT;
+3. retries a request whose reply was "lost" (no duplicate commit), and reuses its ID with a different payload (INVALID);
+4. quarantines `web-01`, which closes its live session through sync while `api-01`'s session continues;
+5. releases `web-01`: the old lease fails on its watermark and a fresh lease works;
+6. stops the control plane: sessions close and issuance and admission stop when the 5 s freshness runs out.
+
+It exits 0 when every check passes.
+
+Running the pieces by hand (all configs are the shipped examples):
+
+```powershell
+# One-time explicit bootstrap of the deny-by-default policy into the journal (journal\ is git-ignored)
+java -cp out eastguard.control.ControlPlaneImpl bootstrap --config config/control.properties.example `
+     --state config/bootstrap.properties.example --reason "initial deny-by-default policy"
+java -cp out eastguard.control.ControlPlaneImpl --config config/control.properties.example
+java -cp out eastguard.tokensvc.TokenServer --config config/token.properties.example
+java -cp out eastguard.demos.EchoBackend 127.0.0.1:7002
+java -cp out eastguard.gateway.NioGateway --config config/gateway-app-02.properties.example
+```
+
+The control plane commits every change to an append-only journal and forces it to disk before replying. It
+replays the journal at startup and refuses to start on a corrupt record or a revision gap. RMI uses TLS 1.3 with
+client certificates on both the registry and the object port. Every call carries a per-principal API
+credential, checked against a role (VIEWER, OPERATOR, ADMIN, GATEWAY, ISSUER, DETECTOR).
+
+Rotate or revoke a credential with `.\scripts\gen-credentials.ps1 -Rotate <name>` / `-Retire <name>` /
+`-Revoke <name>`; the control plane reloads the file without a restart.
+
+Gateways and the token service admit nothing until their first successful sync, and treat state as stale 5 s
+after the last successful sync started. See `docs/DEVIATIONS.md` (Task 6).
+
+## Telemetry, threat detector and M3 demo
+
+```powershell
+java -cp out eastguard.demos.DemoM3_Udp          # self-contained: in-memory keys, journal under out\demo-m3
+```
+
+`DemoM3_Udp` sends a labelled fixture stream of telemetry datagrams over real UDP to a `ThreatDetector`, which
+calls a control plane in the same JVM. It shows CIDR classification, the restart guard, learning candidates
+(pilot vs. unscoped), the score transitions clean 30 → 40 → alert at 50 (a lease reduction that shortens only
+newly issued `web-01` leases to 10 s) → critical at 110 (quarantine), decoy hits (a managed IP is quarantined;
+shared NAT and protected infrastructure only alert), and forged, duplicate, out-of-scope and oversized datagrams
+that leave every score unchanged. It exits 0 when every check passes.
+
+Running the detector for real needs its certificate and the per-producer HMAC keys:
+
+```powershell
+.\scripts\gen-certs.ps1 -AddComponent detector   # keys\detector.p12 from the existing demo CA
+.\scripts\gen-credentials.ps1 -TelemetryKeys     # keys\telemetry\gw-app-02.key, tokensvc.key (kept if present)
+java -cp out eastguard.detector.ThreatDetector --config config/detector.properties.example
+```
+
+Gateways and the token service send telemetry when `telemetry.collector` is set (it is in the example configs).
+Sending never blocks: a full queue drops events and counts them, and the sequence gap shows the loss to the
+detector. Automation is off in both `detector.properties.example` and `control.properties.example`
+(alert-only). Turn on `automation.leaseReduction` / `automation.quarantine` in **both** files to let the
+detector propose actions and the control plane commit them. See `docs/DEVIATIONS.md` (Task 7).
 
 ## Writing tests
 

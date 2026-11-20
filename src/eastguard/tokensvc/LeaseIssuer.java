@@ -14,6 +14,9 @@ import eastguard.common.ReasonCode;
 import eastguard.common.ReplyStatus;
 import eastguard.common.WorkloadIdentity;
 import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.util.Arrays;
+import eastguard.common.Ed25519;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.Objects;
@@ -53,12 +56,19 @@ public final class LeaseIssuer {
     private final IssueLimiter limiter;
     private final Clock clock;
     private final SecureRandom random;
+    private final byte[] publicKeyRaw;
 
-    public LeaseIssuer(PolicyEvaluator evaluator, String keyId, PrivateKey signingKey, IssueLimiter limiter,
+    /**
+     * @param publicKey the signing key's own public key; leases are issued only while the installed state
+     *                  publishes exactly this key under {@code keyId}, so gateways can verify them
+     */
+    public LeaseIssuer(PolicyEvaluator evaluator, String keyId, PrivateKey signingKey, PublicKey publicKey,
+            IssueLimiter limiter,
             Clock clock, SecureRandom random) {
         this.evaluator = Objects.requireNonNull(evaluator, "evaluator");
         this.keyId = Ids.require(keyId, "keyId");
         this.signingKey = Objects.requireNonNull(signingKey, "signingKey");
+        this.publicKeyRaw = Ed25519.rawPublicKey(Objects.requireNonNull(publicKey, "publicKey"));
         this.limiter = Objects.requireNonNull(limiter, "limiter");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.random = Objects.requireNonNull(random, "random");
@@ -86,7 +96,8 @@ public final class LeaseIssuer {
             return Outcome.deny(d.reason(), peer);
         }
         EnforcementSnapshot s = view.snapshot();
-        if (s.verificationKey(keyId) == null) {
+        PublicKey published = s.verificationKey(keyId);
+        if (published == null || !Arrays.equals(Ed25519.rawPublicKey(published), publicKeyRaw)) {
             return Outcome.deny(ReasonCode.NOT_READY, peer);
         }
         long iat = clock.millis();

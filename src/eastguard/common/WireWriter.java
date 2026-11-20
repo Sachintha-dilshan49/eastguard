@@ -85,6 +85,23 @@ public final class WireWriter {
         return raw(b);
     }
 
+    /** {@code selector = type:u8 | identity:id OR ip:ip} (spec §5.4). */
+    public WireWriter selector(Selector s) {
+        u8(s.type().code());
+        return s.type() == SelectorType.IDENTITY ? id(s.identity()) : ip(s.ip());
+    }
+
+    /** {@code u16 length | UTF-8 bytes}; for bounded free text such as audit reasons. */
+    public WireWriter text(String s) {
+        byte[] b = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        u16(b.length);
+        return raw(b);
+    }
+
+    public WireWriter bool(boolean b) {
+        return u8(b ? 1 : 0);
+    }
+
     public int size() {
         return out.size();
     }

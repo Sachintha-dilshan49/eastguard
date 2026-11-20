@@ -13,6 +13,7 @@
     tokensvc.p12            token service   SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:tokensvc
     gateway-app-02.p12      gateway app-02  SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:gateway-app-02
     control.p12             control plane   SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:control
+    detector.p12            threat detector SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:detector
     workload-web-01.p12     workload        SAN uri:urn:eastguard:workload:web-01
     workload-api-01.p12     workload        SAN uri:urn:eastguard:workload:api-01
     untrusted-web-01.p12    workload web-01 issued by the untrusted CA (must fail the TLS handshake)
@@ -38,6 +39,9 @@
   Leaf certificate validity. The CAs get 30 extra days.
 .PARAMETER TestFixtures
   Also create the negative-test workload certificates.
+.PARAMETER AddComponent
+  Issue only one more component certificate (serverAuth+clientAuth, SAN uri:urn:eastguard:component:<name>)
+  from the existing demo CA, e.g. -AddComponent detector after upgrading from an older key set.
 .PARAMETER Force
   Replace existing keystores and certificates. Existing password files are kept and reused.
 #>
@@ -45,7 +49,8 @@ param(
     [string]$OutDir,
     [ValidateRange(1, 3650)][int]$ValidityDays = 365,
     [switch]$TestFixtures,
-    [switch]$Force
+    [switch]$Force,
+    [string]$AddComponent
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3
@@ -164,6 +169,32 @@ function New-Workload([string]$Name, [string]$San, [string]$CaStore, [string]$Ca
 # ---- main ----
 
 $script:Keytool = Find-Keytool
+
+if ($AddComponent) {
+    # One more component certificate from the existing demo CA; nothing else is touched.
+    if ($AddComponent -notmatch '^[a-z0-9][a-z0-9._-]{0,63}$') { throw "invalid component name '$AddComponent'" }
+    $caStore = Join-Path $caDir 'ca.p12'
+    $caCer = Join-Path $OutDir 'ca.cer'
+    if (-not (Test-Path -LiteralPath $caStore) -or -not (Test-Path -LiteralPath $caCer)) {
+        throw "no demo CA under $OutDir; run this script without -AddComponent first"
+    }
+    $target = Join-Path $OutDir "$AddComponent.p12"
+    if (Test-Path -LiteralPath $target) {
+        if (-not $Force) { throw "$target already exists (use -Force to replace it)" }
+        Remove-Item -LiteralPath $target -Force
+    }
+    $env:EG_GEN_STORE = Get-Secret 'EASTGUARD_STORE_PASS' (Join-Path $OutDir 'store.pass')
+    $env:EG_GEN_CA = Get-Secret 'EASTGUARD_CA_PASS' (Join-Path $caDir 'ca.pass')
+    try {
+        New-Item -ItemType Directory -Force -Path $work | Out-Null
+        New-Server $AddComponent $AddComponent
+        Protect-File $target
+    } finally {
+        Remove-Item Env:EG_GEN_STORE, Env:EG_GEN_CA -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
+    }
+    exit 0
+}
 New-Item -ItemType Directory -Force -Path $OutDir, $caDir | Out-Null
 
 $existing = @(Get-ChildItem -LiteralPath $OutDir, $caDir -File |
@@ -198,6 +229,7 @@ try {
     New-Server 'tokensvc' 'tokensvc'
     New-Server 'gateway-app-02' 'gateway-app-02'
     New-Server 'control' 'control'
+    New-Server 'detector' 'detector'
     New-Workload 'workload-web-01' 'uri:urn:eastguard:workload:web-01' $caStore $caCer 'web-01'
     New-Workload 'workload-api-01' 'uri:urn:eastguard:workload:api-01' $caStore $caCer 'api-01'
     New-Workload 'untrusted-web-01' 'uri:urn:eastguard:workload:web-01' $badStore $badCer 'web-01'

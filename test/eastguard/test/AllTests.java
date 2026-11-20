@@ -39,7 +39,17 @@ public final class AllTests {
             TokenServerTest.class,
             SessionIndexTest.class,
             GatewayConfigTest.class,
-            GatewayTest.class);
+            GatewayTest.class,
+            JournalTest.class,
+            ControlPlaneImplTest.class,
+            RmiTest.class,
+            StateSyncTest.class,
+            ControlE2ETest.class,
+            TelemetryProducerTest.class,
+            TelemetryVerifierTest.class,
+            RiskEngineTest.class,
+            DetectorControlTest.class,
+            DetectorPipelineTest.class);
 
     /** Strong reference: java.util.logging only holds loggers weakly, which would drop the level. */
     private static final Logger QUIET = Logger.getLogger("eastguard");

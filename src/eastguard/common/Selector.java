@@ -6,7 +6,7 @@ import java.util.Objects;
  * Restriction target: exactly one of a workload identity or an IP address (spec §3.1, §5.4). IDENTITY and IP
  * selectors are independent; a match on any active selector denies.
  */
-public record Selector(SelectorType type, String identity, IpAddress ip) {
+public record Selector(SelectorType type, String identity, IpAddress ip) implements java.io.Serializable {
     public Selector {
         Objects.requireNonNull(type, "type");
         switch (type) {

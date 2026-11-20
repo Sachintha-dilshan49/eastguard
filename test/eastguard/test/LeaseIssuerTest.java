@@ -41,7 +41,7 @@ public final class LeaseIssuerTest {
     private final PolicyEvaluator evaluator = new PolicyEvaluator(CLOCK);
 
     private LeaseIssuer issuer(int perSecond) {
-        return new LeaseIssuer(evaluator, KEY_ID, LEASE_KEYS.getPrivate(), new IssueLimiter(perSecond, nanos::get),
+        return new LeaseIssuer(evaluator, KEY_ID, LEASE_KEYS.getPrivate(), LEASE_KEYS.getPublic(), new IssueLimiter(perSecond, nanos::get),
                 CLOCK, new SecureRandom());
     }
 
@@ -79,6 +79,18 @@ public final class LeaseIssuerTest {
         assertEquals(l, o.lease());
         // The gateway's evaluator accepts what the issuer signed.
         assertTrue(evaluator.admit(view(), PEER, SERVICE, o.reply().token().toArray()).allowed(), "admitted");
+    }
+
+    public void testNoLeaseUnlessTheStatePublishesOurOwnKey() {
+        // Same key ID, different key: gateways would reject every lease, so the issuer refuses to sign.
+        LeaseIssuer mismatched = new LeaseIssuer(evaluator, KEY_ID, LEASE_KEYS.getPrivate(),
+                eastguard.common.Ed25519.generate().getPublic(), new IssueLimiter(10, nanos::get), CLOCK,
+                new SecureRandom());
+        assertEquals(ReasonCode.NOT_READY, mismatched.issue(view(), PEER, SERVICE).reason());
+        // Our key not published at all.
+        EnforcementView unpublished = EnforcementView.fresh(snapshot(List.of(), List.of(), Map.of(), Set.of()));
+        assertEquals(ReasonCode.NOT_READY, issuer(10).issue(unpublished, PEER, SERVICE).reason());
+        assertEquals(ReasonCode.OK, issuer(10).issue(view(), PEER, SERVICE).reason());
     }
 
     public void testJtiIsRandomPerLease() throws Exception {

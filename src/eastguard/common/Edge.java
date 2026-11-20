@@ -4,7 +4,7 @@ package eastguard.common;
  * An allowed (or candidate) connection: source workload identity to service. The service determines the
  * listener and fixed backend, so the caller never chooses a relay destination (spec §3.1).
  */
-public record Edge(String sourceIdentity, String serviceId) {
+public record Edge(String sourceIdentity, String serviceId) implements java.io.Serializable {
     public Edge {
         Ids.require(sourceIdentity, "sourceIdentity");
         Ids.require(serviceId, "serviceId");

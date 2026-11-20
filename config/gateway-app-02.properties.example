@@ -1,18 +1,19 @@
 # EastGuard NIO gateway for service app-02 (spec §4.3, §9.1).
-# Copy to config/gateway-app-02.properties (git-ignored) to customise. No secrets here: the store password
-# comes from the environment variable below, else from the git-ignored file scripts/gen-certs.ps1 creates.
-# Paths are relative to the working directory (the project root). Start the backend first:
+# Copy to config/gateway-app-02.properties (git-ignored) to customise. No secrets here: the store password and
+# the API secret come from the environment variables below, else from git-ignored files under keys\.
+# Paths are relative to the project root. Start the control plane and the backend first:
 #
 #   java -cp out eastguard.demos.EchoBackend 127.0.0.1:7002
 #   java -cp out eastguard.gateway.NioGateway --config config/gateway-app-02.properties.example
 
+cluster.id=eg-demo
 gateway.service=app-02
 listen=127.0.0.1:9002
 backend=127.0.0.1:7002
 decoy.listen=127.0.0.1:9003
 decoy.id=decoy-9003
 
-# --- TLS (mTLS, TLS 1.3 only) ---
+# --- TLS (mTLS, TLS 1.3 only). The same certificate is the RMI client identity towards the control plane. ---
 tls.keyStore=keys/gateway-app-02.p12
 tls.trustStore=keys/truststore.p12
 tls.passwordEnv=EASTGUARD_STORE_PASS
@@ -38,5 +39,21 @@ limits.commandQueue=1024
 limits.backlog=512
 limits.maxAcceptsPerEvent=64
 
-# --- Enforcement state: the token service's static bootstrap. Replaced by control-plane sync in Task 6. ---
-bootstrap.file=config/token.properties.example
+# --- Authoritative state from the control plane (RMI over mTLS, role GATEWAY), polled off the selector ---
+control.registry=127.0.0.1:1099
+control.objectPort=1100
+control.principal=gw-app-02
+control.secretEnv=EASTGUARD_API_SECRET_GW_APP_02
+control.secretFile=keys/api/gw-app-02.secret
+# No admissions before the first sync; after 5 s without a successful sync, deny and close relay sessions.
+state.pollMillis=1000
+state.maxAgeMillis=5000
+
+# --- Flow telemetry (spec §5.3): HMAC-authenticated, best-effort UDP to the threat detector. Never blocks the ---
+# --- selector: a full queue drops (and counts) events. Key: scripts/gen-credentials.ps1 -TelemetryKeys      ---
+telemetry.collector=127.0.0.1:5514
+telemetry.producerId=gw-app-02
+telemetry.keyId=tk1
+telemetry.keyEnv=EASTGUARD_TELEMETRY_KEY_GW_APP_02
+telemetry.keyFile=keys/telemetry/gw-app-02.key
+telemetry.queue=4096

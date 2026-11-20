@@ -67,8 +67,9 @@ public final class DemoM2_Tls {
         SecretSource storePass = cfg.tls().password();
         IpAddress loopback = IpAddress.parse("127.0.0.1");
 
+        eastguard.common.EnforcementSnapshot boot = eastguard.common.BootstrapState.snapshot(eastguard.common.Config.load(Path.of("config/bootstrap.properties.example")));
         try (TokenServer server = TokenServer.create(cfg, clock,
-                new InetSocketAddress(InetAddress.getLoopbackAddress(), 0))) {
+                new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), () -> EnforcementView.fresh(boot))) {
             server.start();
             Endpoint issuer = new Endpoint(loopback, server.port());
             title("Token service on " + issuer + " (TLS 1.3 only, client certificate required)");
@@ -89,7 +90,7 @@ public final class DemoM2_Tls {
                     && lease.leafSha256().equals(webFp), "lease bound to web-01, its certificate, and the socket IP");
 
             PolicyEvaluator verifier = new PolicyEvaluator(clock);
-            EnforcementView gatewayView = EnforcementView.fresh(cfg.bootstrap());
+            EnforcementView gatewayView = EnforcementView.fresh(boot);
             Peer webPeer = new Peer("web-01", webFp, loopback);
             var genuine = verifier.admit(gatewayView, webPeer, "app-02", token);
             check(genuine.allowed(), "gateway verifier admits the genuine lease (" + genuine.reason() + ")");

@@ -7,12 +7,19 @@ import eastguard.common.IssuerRequest;
 import eastguard.common.CodecException;
 import eastguard.common.KeyStores;
 import eastguard.common.PolicyEvaluator;
+import eastguard.common.ReasonCode;
+import eastguard.common.TelemetrySender;
+import eastguard.common.Verdict;
+import eastguard.common.Endpoint;
+import eastguard.control.ControlClient;
+import eastguard.control.StateSync;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.file.Path;
+import java.security.KeyPair;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.PublicKey;
@@ -49,6 +56,7 @@ import javax.net.ssl.SSLSocket;
  *       closes the socket when it passes, so a client dribbling bytes cannot hold a permit longer.</li>
  *   <li>The peer IP comes from the accepted socket. The identity comes from the verified certificate.</li>
  *   <li>Malformed requests and TLS failures get no application reply. Tokens are never logged.</li>
+ *   <li>Selected denials go to the UDP telemetry producer, if one is attached ({@link #reportable}).</li>
  * </ul>
  *
  * Run: {@code java -cp out eastguard.tokensvc.TokenServer --config config/token.properties}
@@ -90,6 +98,9 @@ public final class TokenServer implements AutoCloseable {
     private final AtomicLong timedOut = new AtomicLong();
 
     private volatile SSLServerSocket server;
+    private final java.util.List<AutoCloseable> owned = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private volatile TelemetrySender telemetry;
+    private volatile Clock reportClock = Clock.systemUTC();
     private Thread acceptor;
 
     /**
@@ -113,36 +124,52 @@ public final class TokenServer implements AutoCloseable {
     }
 
     /**
-     * Wires a server from configuration: its own TLS context, the signing key (which must match the published
-     * verification key for {@code lease.keyId}), and a fixed bootstrap view.
+     * Wires a server from configuration with authoritative state from the control plane: a {@link StateSync}
+     * polls over RMI on its own thread (started here), and issuance is refused until the first valid sync and
+     * whenever freshness has expired. The token service's TLS certificate is also its RMI client identity.
      */
     public static TokenServer create(TokenConfig cfg, Clock clock, InetSocketAddress bind) {
         SSLContext ctx = TlsContextFactory.create(cfg.tls());
-        PrivateKey signingKey = loadSigningKey(cfg);
-        EnforcementView view = EnforcementView.fresh(cfg.bootstrap());
-        LeaseIssuer issuer = new LeaseIssuer(new PolicyEvaluator(clock), cfg.keyId(), signingKey,
-                new IssueLimiter(cfg.issuePerIdentityPerSecond(), System::nanoTime), clock, new SecureRandom());
-        return new TokenServer(ctx, bind, () -> view, issuer, cfg.limits());
+        StateSync sync = new StateSync("tokensvc", new ControlClient(cfg.control(), ctx)::sync, cfg.sync(),
+                System::nanoTime);
+        TokenServer server = create(cfg, clock, bind, ctx, sync);
+        server.owned.add(sync);
+        if (cfg.telemetry() != null) {
+            server.reportTo(TelemetrySender.create(cfg.sync().clusterId(), cfg.telemetry()), clock);
+        }
+        sync.start();
+        return server;
     }
 
     public static TokenServer create(TokenConfig cfg, Clock clock) {
         return create(cfg, clock, cfg.listen().toSocketAddress());
     }
 
-    static PrivateKey loadSigningKey(TokenConfig cfg) {
+    /** As configured, but with a caller-supplied state (demos with a fixed fixture; tests). */
+    public static TokenServer create(TokenConfig cfg, Clock clock, InetSocketAddress bind,
+            Supplier<EnforcementView> state) {
+        return create(cfg, clock, bind, TlsContextFactory.create(cfg.tls()), state);
+    }
+
+    private static TokenServer create(TokenConfig cfg, Clock clock, InetSocketAddress bind, SSLContext ctx,
+            Supplier<EnforcementView> state) {
+        KeyPair signer = loadSigningKey(cfg);
+        LeaseIssuer issuer = new LeaseIssuer(new PolicyEvaluator(clock), cfg.keyId(), signer.getPrivate(),
+                signer.getPublic(), new IssueLimiter(cfg.issuePerIdentityPerSecond(), System::nanoTime), clock,
+                new SecureRandom());
+        return new TokenServer(ctx, bind, state, issuer, cfg.limits());
+    }
+
+    /** The signing key and the public key from its certificate (checked against the published key per lease). */
+    static KeyPair loadSigningKey(TokenConfig cfg) {
         Path file = cfg.signerStore();
         char[] pw = cfg.signerPassword().read();
         try {
             KeyStore ks = KeyStores.load(file, pw);
             PrivateKey key = KeyStores.privateKey(ks, cfg.signerAlias(), pw, file);
             PublicKey own = KeyStores.certificate(ks, cfg.signerAlias(), file).getPublicKey();
-            PublicKey published = cfg.bootstrap().tokenKeys().get(cfg.keyId());
-            if (published == null
-                    || !Arrays.equals(Ed25519.rawPublicKey(own), Ed25519.rawPublicKey(published))) {
-                throw new IllegalStateException("lease signing key " + cfg.keyId()
-                        + " does not match the published verification key; gateways would reject every lease");
-            }
-            return key;
+            Ed25519.rawPublicKey(own); // must be Ed25519
+            return new KeyPair(own, key);
         } finally {
             Arrays.fill(pw, '\0');
         }
@@ -151,6 +178,10 @@ public final class TokenServer implements AutoCloseable {
     public synchronized void start() throws IOException {
         if (server != null) {
             throw new IllegalStateException("already started");
+        }
+        TelemetrySender t = telemetry;
+        if (t != null) {
+            t.start();
         }
         server = TlsContextFactory.serverSocket(ctx, bind, limits.backlog());
         acceptor = Thread.ofPlatform().name("tokensvc-accept").start(this::acceptLoop);
@@ -221,7 +252,8 @@ public final class TokenServer implements AutoCloseable {
                 }
                 return;
             }
-            LeaseIssuer.Outcome o = issuer.issue(state.get(), s.getSession(), ip, request.targetService());
+            EnforcementView view = state.get();
+            LeaseIssuer.Outcome o = issuer.issue(view, s.getSession(), ip, request.targetService());
             OutputStream out = s.getOutputStream();
             out.write(o.reply().encode());
             out.flush();
@@ -235,6 +267,7 @@ public final class TokenServer implements AutoCloseable {
                 denied.incrementAndGet();
                 LOG.info(() -> "lease denied sub=" + who + " aud=" + request.targetService() + " ip=" + ip
                         + " reason=" + o.reason());
+                report(o, view, request.targetService(), s);
             }
         } catch (IOException e) {
             // The read timeout and the watchdog are both set to the deadline; whichever fires first, it is a timeout.
@@ -253,6 +286,42 @@ public final class TokenServer implements AutoCloseable {
             guard.cancel(false);
             permits.release();
         }
+    }
+
+    /**
+     * Sends selected denials to {@code sender} from now on (spec §1 "selected token-service denials"). Call before
+     * {@link #start()}. The sender is closed with this server.
+     */
+    public void reportTo(TelemetrySender sender, Clock clock) {
+        this.reportClock = Objects.requireNonNull(clock, "clock");
+        this.telemetry = Objects.requireNonNull(sender, "sender");
+        owned.add(sender);
+    }
+
+    /**
+     * Which issuer denials are worth a telemetry event (spec §6.1): only for a peer whose identity TLS
+     * established, and only a policy denial for a <em>known</em> service, or a quarantine. Everything else
+     * (bad certificates, throttling, NOT_READY, unknown services) stays in the local log and counters.
+     */
+    public static boolean reportable(LeaseIssuer.Outcome o, EnforcementView view, String service) {
+        if (o.issued() || o.peer() == null) {
+            return false;
+        }
+        return switch (o.reason()) {
+            case QUARANTINED -> true;
+            case POLICY_DENY -> view.snapshot() != null && view.snapshot().services().containsKey(service);
+            default -> false;
+        };
+    }
+
+    private void report(LeaseIssuer.Outcome o, EnforcementView view, String service, SSLSocket s) {
+        TelemetrySender t = telemetry;
+        if (t == null || !reportable(o, view, service)) {
+            return;
+        }
+        Endpoint listener = new Endpoint(IpAddress.of(s.getLocalAddress()), s.getLocalPort());
+        t.offer(reportClock.millis(), o.peer().identity(), o.peer().ip(), service, listener, Verdict.DENY, o.reason(),
+                o.reason() == ReasonCode.POLICY_DENY, view.snapshot() == null ? 0 : view.snapshot().revision());
     }
 
     /** Stops accepting, waits up to one deadline for in-flight requests, then aborts the rest. */
@@ -275,6 +344,9 @@ public final class TokenServer implements AutoCloseable {
             Thread.currentThread().interrupt();
         }
         watchdog.shutdownNow();
+        for (AutoCloseable c : owned) {
+            closeQuietly(c);
+        }
     }
 
     private static void closeQuietly(AutoCloseable c) {

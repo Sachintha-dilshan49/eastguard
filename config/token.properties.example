@@ -1,26 +1,25 @@
-# EastGuard token service bootstrap configuration (spec §9.1).
-# Copy to config/token.properties (git-ignored) to customise. This file holds no secrets: passwords come
-# from the environment variables below, else from the git-ignored files that scripts/gen-certs.ps1 creates.
-# Paths are relative to the working directory (the project root).
+# EastGuard token service configuration (spec §9.1).
+# Copy to config/token.properties (git-ignored) to customise. This file holds no secrets: passwords and the API
+# secret come from the environment variables below, else from git-ignored files under keys\ created by
+# scripts/gen-certs.ps1 and scripts/gen-credentials.ps1. Paths are relative to the project root.
 #
 #   java -cp out eastguard.tokensvc.TokenServer --config config/token.properties.example
 
 cluster.id=eg-demo
 listen=127.0.0.1:8443
 
-# --- TLS (mTLS, TLS 1.3 only) ---
+# --- TLS (mTLS, TLS 1.3 only). The same certificate is the RMI client identity towards the control plane. ---
 tls.keyStore=keys/tokensvc.p12
 tls.trustStore=keys/truststore.p12
 tls.passwordEnv=EASTGUARD_STORE_PASS
 tls.passwordFile=keys/store.pass
 
-# --- Lease signing (Ed25519). The public key must equal bootstrap.tokenKey.<keyId>.cert ---
+# --- Lease signing (Ed25519). The control plane must publish this public key under lease.keyId. ---
 lease.keyStore=keys/lease-signer.p12
 lease.keyAlias=lease-k1
 lease.keyId=lease-k1
 lease.passwordEnv=EASTGUARD_SIGNER_PASS
 lease.passwordFile=keys/signer.pass
-lease.defaultSeconds=60
 
 # --- Resource limits ---
 limits.maxConcurrent=64
@@ -28,18 +27,20 @@ limits.deadlineMillis=5000
 limits.backlog=128
 limits.issuePerIdentityPerSecond=20
 
-# --- Bootstrap enforcement state. Replaced by control-plane sync in Task 6. ---
-# Deny by default: only the edges listed here are approved.
-bootstrap.revision=1
-bootstrap.mode=ENFORCE
-bootstrap.workloads=web-01,api-01
-bootstrap.services=app-02
-bootstrap.service.app-02.gateway=app-02
-bootstrap.service.app-02.listener=127.0.0.1:9002
-bootstrap.service.app-02.serverName=127.0.0.1
-bootstrap.service.app-02.backend=127.0.0.1:7002
-bootstrap.edges=web-01>app-02
-bootstrap.pilot.sources=
-bootstrap.pilot.services=
-bootstrap.tokenKeys=lease-k1
-bootstrap.tokenKey.lease-k1.cert=keys/lease-k1.cer
+# --- Authoritative state from the control plane (RMI over mTLS, role ISSUER) ---
+control.registry=127.0.0.1:1099
+control.objectPort=1100
+control.principal=tokensvc
+control.secretEnv=EASTGUARD_API_SECRET_TOKENSVC
+control.secretFile=keys/api/tokensvc.secret
+# Poll about once per second; a successful sync keeps state usable for at most 5 s from request start.
+state.pollMillis=1000
+state.maxAgeMillis=5000
+
+# --- Flow telemetry (spec §5.3): only selected denials (policy deny for a known service, quarantine) ---
+telemetry.collector=127.0.0.1:5514
+telemetry.producerId=tokensvc
+telemetry.keyId=tk1
+telemetry.keyEnv=EASTGUARD_TELEMETRY_KEY_TOKENSVC
+telemetry.keyFile=keys/telemetry/tokensvc.key
+telemetry.queue=1024
