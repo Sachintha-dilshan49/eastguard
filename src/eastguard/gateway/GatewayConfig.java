@@ -6,6 +6,7 @@ import eastguard.common.Ids;
 import eastguard.common.SecretSource;
 import eastguard.common.TelemetrySender;
 import eastguard.control.ControlClient;
+import eastguard.bus.MulticastSettings;
 import eastguard.control.StateSync;
 import eastguard.tokensvc.TlsContextFactory;
 import java.nio.file.Path;
@@ -27,11 +28,12 @@ import java.util.Objects;
  * state.pollMillis, state.maxAgeMillis   see {@link StateSync.Settings}
  * limits.*                               see {@link GatewayLimits}
  * telemetry.*                            optional UDP producer, see {@link TelemetrySender.Settings}
+ * multicast.*                            optional quarantine notices, see {@link MulticastSettings}
  * </pre>
  */
 public record GatewayConfig(String serviceId, Endpoint listen, Endpoint backend, Endpoint decoyListen, String decoyId,
         TlsContextFactory.Material tls, GatewayLimits limits, ControlClient.Settings control, StateSync.Settings sync,
-        TelemetrySender.Settings telemetry) {
+        TelemetrySender.Settings telemetry, MulticastSettings multicast) {
 
     public GatewayConfig {
         Ids.require(serviceId, "serviceId");
@@ -61,7 +63,9 @@ public record GatewayConfig(String serviceId, Endpoint listen, Endpoint backend,
         ControlClient.Settings control = ControlClient.Settings.from(c);
         StateSync.Settings sync = StateSync.Settings.from(c);
         TelemetrySender.Settings telemetry = TelemetrySender.Settings.from(c); // null: no collector
+        MulticastSettings multicast = MulticastSettings.from(c); // null: no notices, polling only
         c.requireNoUnknownKeys();
-        return new GatewayConfig(service, listen, backend, decoy, decoyId, tls, limits, control, sync, telemetry);
+        return new GatewayConfig(service, listen, backend, decoy, decoyId, tls, limits, control, sync, telemetry,
+                multicast);
     }
 }

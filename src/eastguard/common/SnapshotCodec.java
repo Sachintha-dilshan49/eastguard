@@ -18,7 +18,7 @@ import java.util.Set;
  * constructors and rejects trailing bytes, so a decoded snapshot is as trustworthy as one built in-process.
  *
  * <pre>
- * "EGS1" | cluster:id | revision:i64
+ * "EGS2" | cluster:id | revision:i64
  * | mode:u8 | policyRevision:i64 | defaultLeaseMs:i64 | n:u16 (source:id service:id)*
  * | n:u16 pilotSource:id* | n:u16 pilotService:id*
  * | n:u16 (id enabled:u8 hasZone:u8 [ip prefix:u8] n:u16 revokedLeaf:32*)*            workloads
@@ -28,10 +28,12 @@ import java.util.Set;
  * | n:u16 (selector minTokenRevision:i64)*                                               release watermarks
  * | n:u16 (keyId:id ed25519:32)*                                                         token keys
  * | n:u16 keyId:id*                                                                      revoked key IDs
+ * | n:u16 (keyId:id ed25519:32)*                                                         control (notice) keys
  * </pre>
  */
 public final class SnapshotCodec {
-    public static final String MAGIC = "EGS1";
+    /** "EGS2" since Task 8 added the control keys; an "EGS1" (older) journal must be re-bootstrapped. */
+    public static final String MAGIC = "EGS2";
     public static final int MAX_SIZE = 1 << 20;
     private static final int MAX_COUNT = 65_535;
     private static final Comparator<Selector> BY_SELECTOR = Comparator.comparing(Selector::toString);
@@ -100,6 +102,12 @@ public final class SnapshotCodec {
             w.id(k).raw(Ed25519.rawPublicKey(s.tokenKeys().get(k)));
         }
         ids(w, s.revokedKeyIds());
+        List<String> controlIds = new ArrayList<>(s.controlKeys().keySet());
+        controlIds.sort(null);
+        w.u16(controlIds.size());
+        for (String k : controlIds) {
+            w.id(k).raw(Ed25519.rawPublicKey(s.controlKeys().get(k)));
+        }
         if (w.size() > MAX_SIZE) {
             throw new IllegalArgumentException("snapshot exceeds " + MAX_SIZE + " bytes");
         }
@@ -171,9 +179,13 @@ public final class SnapshotCodec {
                 put(keys, r.id(), Ed25519.publicKeyFromRaw(r.raw(Ed25519.KEY_LENGTH)));
             }
             Set<String> revokedKeys = readIds(r);
+            Map<String, PublicKey> controlKeys = new HashMap<>();
+            for (int i = r.count(MAX_COUNT); i > 0; i--) {
+                put(controlKeys, r.id(), Ed25519.publicKeyFromRaw(r.raw(Ed25519.KEY_LENGTH)));
+            }
             r.end();
             return new EnforcementSnapshot(cluster, revision, policy, workloads, services, restrictions, reductions,
-                    watermarks, keys, revokedKeys);
+                    watermarks, keys, revokedKeys, controlKeys);
         } catch (IllegalArgumentException | ArithmeticException e) {
             throw new CodecException("invalid snapshot: " + e.getMessage());
         }

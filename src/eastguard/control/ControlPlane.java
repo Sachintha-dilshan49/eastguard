@@ -25,7 +25,8 @@ import java.rmi.RemoteException;
  *
  * <pre>
  * sync                                 GATEWAY, ISSUER
- * getDashboard, getPolicy              VIEWER, OPERATOR, ADMIN
+ * getDashboard, getPolicy,
+ * getLearningDraft                     VIEWER, OPERATOR, ADMIN
  * quarantine, release                  OPERATOR, ADMIN
  * replacePolicy, setMode,
  * setLeaseDefaults, freezeBaseline     ADMIN
@@ -58,6 +59,9 @@ public interface ControlPlane extends Remote {
     /** Detector quarantine proposal. Implemented in Task 7. */
     MutationResult proposeAction(ActionProposal request) throws RemoteException;
 
-    /** Commit a reviewed learning draft as the allow-list and switch to ENFORCE. Implemented in Task 9. */
+    /** Commit a reviewed learning draft as the allow-list and switch to ENFORCE, in one journaled mutation. */
     MutationResult freezeBaseline(FreezeRequest request) throws RemoteException;
+
+    /** The learning draft for review: approved edges, candidates, version and completeness counters. */
+    Dto.LearningDraftView getLearningDraft(Dto.LearningDraftRequest request) throws RemoteException;
 }

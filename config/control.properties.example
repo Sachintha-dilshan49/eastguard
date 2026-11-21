@@ -25,6 +25,11 @@ journal.file=journal/control.journal
 # --- Per-principal API credentials (digests + roles); reloaded when the file changes ---
 credentials.file=keys/control-credentials.properties
 
+# --- HTTPS audit export (spec §7.3): read-only /audit (paginated), /metrics, /health/live, /health/ready. ---
+# --- TLS 1.3 with a required client certificate whose URI SAN is listed below (the operator console).      ---
+audit.listen=127.0.0.1:9443
+audit.allowedClients=urn:eastguard:console:dashboard
+
 # --- Limits ---
 quarantine.maxTtlSeconds=86400
 audit.retainedEntries=10000
@@ -45,3 +50,19 @@ automation.excludedCidrs=10.0.99.0/24,10.0.0.0/28
 
 # --- Learning draft (in memory; candidates beyond this are dropped and counted) ---
 learning.maxCandidates=10000
+
+# --- Quarantine notices (spec §5.4, §6.2 step 1): after each committed quarantine or release, the same signed ---
+# --- EGC1 notice is multicast 3 times. A send failure never undoes the commit; receivers converge by sync.    ---
+multicast.group=239.20.20.20
+multicast.port=4446
+# Explicit sending interface: an address of the interface or its name. 127.0.0.1 keeps the demo on loopback.
+multicast.interface=127.0.0.1
+multicast.ttl=1
+# Ed25519 control-plane signer (NOT the lease key): .\scripts\gen-certs.ps1 -AddControlSigner. Its public key
+# must be published by the journal (bootstrap.controlKeys in the bootstrap state).
+notice.keyStore=keys/control-signer.p12
+notice.keyAlias=control-k1
+notice.keyId=control-k1
+notice.passwordEnv=EASTGUARD_CONTROL_SIGNER_PASS
+notice.passwordFile=keys/control-signer.pass
+notice.repeatGapMillis=10

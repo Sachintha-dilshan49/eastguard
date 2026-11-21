@@ -274,6 +274,42 @@ public sealed interface Mutation {
         }
     }
 
+    /**
+     * Freeze a reviewed learning baseline (spec §3.2): the approved edges become exactly {@code edges}, the mode
+     * becomes ENFORCE and the pilot scope is cleared, in one record. {@code draftVersion} is the reviewed draft
+     * version, kept for the audit.
+     */
+    record FreezeBaseline(Set<Edge> edges, long draftVersion) implements Mutation {
+        public FreezeBaseline {
+            edges = Set.copyOf(edges);
+            if (draftVersion < 0) {
+                throw new IllegalArgumentException("draft version negative");
+            }
+        }
+
+        public int code() {
+            return 10;
+        }
+
+        public String operation() {
+            return "FREEZE_BASELINE";
+        }
+
+        public void writeBody(WireWriter w) {
+            List<Edge> sorted = new ArrayList<>(edges);
+            sorted.sort(Comparator.comparing(Edge::toString));
+            w.u16(sorted.size());
+            sorted.forEach(e -> w.id(e.sourceIdentity()).id(e.serviceId()));
+            w.i64(draftVersion);
+        }
+
+        public EnforcementSnapshot apply(EnforcementSnapshot s, JournalRecord r) {
+            Policy p = s.policy();
+            return withPolicy(s, r, new Policy(PolicyMode.ENFORCE, edges, PilotScope.NONE, r.revision(),
+                    p.defaultLeaseLength()));
+        }
+    }
+
     /** The control plane's own transition removing lease reductions whose expiry has passed. */
     record ExpireReductions(List<Selector> selectors) implements Mutation {
         public ExpireReductions {
@@ -318,14 +354,14 @@ public sealed interface Mutation {
                 yield new Quarantine(sel, ReasonCode.fromCode(r.u8()), r.nonNegative("expiresAt"));
             }
             case 3, 4 -> new Release(readSelectors(r), code == 4);
-            case 5 -> {
-                Set<Edge> edges = new HashSet<>();
-                for (int i = r.count(MAX_EDGES); i > 0; i--) {
-                    if (!edges.add(new Edge(r.id(), r.id()))) {
-                        throw new CodecException("duplicate edge");
-                    }
+            case 5 -> new ReplacePolicy(readEdges(r));
+            case 10 -> {
+                Set<Edge> edges = readEdges(r);
+                long version = r.i64();
+                if (version < 0) {
+                    throw new CodecException("draft version negative");
                 }
-                yield new ReplacePolicy(edges);
+                yield new FreezeBaseline(edges, version);
             }
             case 6 -> new SetMode(SnapshotCodec.mode(r.u8()), new PilotScope(readIds(r), readIds(r)));
             case 7 -> new SetLeaseDefaults(Duration.ofMillis(r.i64()));
@@ -353,6 +389,16 @@ public sealed interface Mutation {
             case 9 -> new ExpireReductions(readSelectors(r));
             default -> throw new CodecException("unknown mutation");
         };
+    }
+
+    private static Set<Edge> readEdges(WireReader r) throws CodecException {
+        Set<Edge> edges = new HashSet<>();
+        for (int i = r.count(MAX_EDGES); i > 0; i--) {
+            if (!edges.add(new Edge(r.id(), r.id()))) {
+                throw new CodecException("duplicate edge");
+            }
+        }
+        return edges;
     }
 
     private static void writeSelectors(WireWriter w, List<Selector> selectors) {
@@ -421,6 +467,6 @@ public sealed interface Mutation {
     private static EnforcementSnapshot with(EnforcementSnapshot s, long revision, Policy p, List<Restriction> restrictions,
             List<LeaseReduction> reductions, Map<Selector, Long> watermarks) {
         return new EnforcementSnapshot(s.clusterId(), revision, p, s.workloads(), s.services(), restrictions,
-                reductions, watermarks, s.tokenKeys(), s.revokedKeyIds());
+                reductions, watermarks, s.tokenKeys(), s.revokedKeyIds(), s.controlKeys());
     }
 }

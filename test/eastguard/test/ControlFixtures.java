@@ -56,6 +56,10 @@ final class ControlFixtures {
         credentials = Credentials.of(list);
     }
 
+    static Clock fixedClock() {
+        return Clock.fixed(Instant.parse("2026-11-19T10:00:00Z"), ZoneOffset.UTC);
+    }
+
     static Bytes secret() {
         byte[] b = new byte[32];
         RANDOM.nextBytes(b);

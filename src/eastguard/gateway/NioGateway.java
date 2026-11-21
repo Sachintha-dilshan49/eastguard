@@ -1,5 +1,8 @@
 package eastguard.gateway;
 
+import eastguard.bus.MulticastTransport;
+import eastguard.bus.NoticeTransport;
+import eastguard.bus.QuarantineListener;
 import eastguard.common.Bytes;
 import eastguard.common.CodecException;
 import eastguard.common.Endpoint;
@@ -22,6 +25,7 @@ import eastguard.control.StateSync;
 import eastguard.gateway.ChannelPair.State;
 import eastguard.tokensvc.TlsContextFactory;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
@@ -177,6 +181,7 @@ public final class NioGateway implements AutoCloseable {
     private final long[] latencyRing = new long[4_096];
     private int latencyCount;
 
+    private volatile StateSync sync; // set by create()
     private volatile boolean running;
     private Thread thread;
 
@@ -220,21 +225,62 @@ public final class NioGateway implements AutoCloseable {
         this.commands = new ArrayBlockingQueue<>(limits.commandQueue());
     }
 
-    /** Builds a gateway from configuration, with its own TLS context and the bootstrap state (Task 6 replaces it). */
+    /**
+     * Builds a gateway from configuration: its own TLS context, authoritative state from the control plane over
+     * RMI (polled on a background thread, never on the selector), and quarantine notices from the configured
+     * multicast group when {@code multicast.*} is set.
+     */
     public static NioGateway create(GatewayConfig cfg, Clock clock, DecisionSink sink) {
         SSLContext ctx = TlsContextFactory.create(cfg.tls());
-        // State comes from the control plane over RMI on a background thread, never on the selector.
         ControlClient control = new ControlClient(cfg.control(), ctx);
-        StateSync sync = new StateSync("gateway-" + cfg.serviceId(), control::sync, cfg.sync(), System::nanoTime);
-        NioGateway g = new NioGateway(cfg.serviceId(), ctx, cfg.listen().toSocketAddress(),
-                cfg.backend().toSocketAddress(), sync, clock, cfg.limits(), sink, BackendConnector.DIRECT);
+        NoticeTransport notices = null;
+        if (cfg.multicast() != null) {
+            try {
+                notices = new MulticastTransport(cfg.multicast());
+            } catch (IOException e) {
+                throw new UncheckedIOException("multicast interface " + cfg.multicast().networkInterface(), e);
+            }
+        }
+        return create(cfg, cfg.listen().toSocketAddress(), ctx, clock, sink, control::sync, notices,
+                "gateway-" + cfg.serviceId());
+    }
+
+    /**
+     * The same wiring with a caller-supplied sync source and notice transport (demos and tests run the control
+     * plane in-process and may inject transport faults).
+     *
+     * @param notices {@code null}: no notices, quarantine arrives by polling only
+     */
+    public static NioGateway create(GatewayConfig cfg, InetSocketAddress listen, SSLContext ctx, Clock clock,
+            DecisionSink sink, StateSync.Source source, NoticeTransport notices, String name) {
+        StateSync sync = new StateSync(name, source, cfg.sync(), System::nanoTime);
+        NioGateway g = new NioGateway(cfg.serviceId(), ctx, listen, cfg.backend().toSocketAddress(), sync,
+                clock, cfg.limits(), sink, BackendConnector.DIRECT);
         if (cfg.decoyListen() != null) {
             g.enableDecoy(cfg.decoyId(), cfg.decoyListen().toSocketAddress());
         }
         sync.addListener(g::reevaluate); // removed edges, quarantines and revocations close matching sessions
+        // A verified quarantine notice closes matching sessions at once, through the session index.
+        sync.addOverlayListener(selectors -> g.closeMatching(selectors, ReasonCode.QUARANTINED));
         g.closeWith(sync);
+        g.sync = sync;
+        if (notices != null) {
+            try { // joined before the first sync, on its own thread
+                g.closeWith(QuarantineListener.forSync(name, notices, sync, clock));
+            } catch (IOException e) {
+                g.close();
+                throw new UncheckedIOException("cannot join the quarantine notice group", e);
+            }
+        } else {
+            LOG.warning("multicast.group is not configured: quarantine reaches " + name + " by polling only");
+        }
         sync.start();
         return g;
+    }
+
+    /** The state sync wired by {@link #create}, or {@code null} for a gateway built with a fixed state. */
+    public StateSync stateSync() {
+        return sync;
     }
 
     /** Closes {@code resource} (e.g. the state sync) when this gateway closes. */

@@ -1,0 +1,28 @@
+# EastGuard operator console (spec §7.3). Copy to config/dashboard.properties (git-ignored) to customise.
+# No secrets here: the store password comes from the environment variable below, else the git-ignored
+# keys\store.pass; the API secret from control.secretEnv, else control.secretFile.
+#
+#   .\scripts\gen-certs.ps1 -AddConsole                     # keys\console.p12 (once, existing keys untouched)
+#   .\scripts\gen-credentials.ps1 -Add console-viewer:VIEWER,console-operator:OPERATOR,console-admin:ADMIN
+#   java -cp out eastguard.dashboard.DashboardApp --config config/dashboard.properties.example
+#   java -cp out eastguard.dashboard.DashboardApp --demo    # labeled fixture scenarios only, no network
+
+# LIVE: the control plane over RMI. DEMO: compiled-in, labeled, read-only fixture scenarios.
+dashboard.profile=LIVE
+# Poll once per interval (one poll outstanding at most); mark the view stale after this much silence.
+dashboard.pollMillis=2000
+dashboard.staleAfterMillis=6000
+
+# --- Control plane (RMI over TLS 1.3, client certificate + per-call API credential) ---
+control.registry=127.0.0.1:1099
+control.objectPort=1100
+# console-viewer (read only), console-operator (quarantine, release) or console-admin (also freeze).
+control.principal=console-operator
+control.secretEnv=EASTGUARD_API_SECRET_CONSOLE
+control.secretFile=keys/api/console-operator.secret
+
+# --- The console's own TLS identity (urn:eastguard:console:dashboard, clientAuth only) ---
+tls.keyStore=keys/console.p12
+tls.trustStore=keys/truststore.p12
+tls.passwordEnv=EASTGUARD_STORE_PASS
+tls.passwordFile=keys/store.pass

@@ -234,15 +234,38 @@ public final class ControlPlaneImpl implements ControlPlane {
     private long draftVersion;
     private long draftDropped;
     private long observationsOutOfScope;
+    private long draftSinceMillis;
+
+    /** Refused detector proposals for the dashboard, by principal/requestId (newest last). Guarded by writeLock. */
+    private static final int MAX_REFUSED = 1_000;
+    private final java.util.LinkedHashMap<String, Dto.AlertView> refused = new java.util.LinkedHashMap<>();
     private volatile EnforcementSnapshot state;
     private volatile Encoded encoded;
     private volatile boolean failed;
+
+    /**
+     * A committed quarantine or release, for the multicast notice sender (spec §6.2 step 1). Emitted only after
+     * the journal record was forced, in revision order.
+     *
+     * @param expiresAtMillis absolute quarantine expiry; 0 for a release or expiry
+     */
+    public record Containment(eastguard.common.NoticeOperation operation, long revision, long committedAtMillis,
+            List<Selector> selectors, long expiresAtMillis, ReasonCode reason) {
+        public Containment {
+            Objects.requireNonNull(operation, "operation");
+            selectors = List.copyOf(selectors);
+            Objects.requireNonNull(reason, "reason");
+        }
+    }
+
+    private final List<Consumer<Containment>> containmentListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private ControlPlaneImpl(Journal journal, Clock clock, Credentials credentials, Settings settings) {
         this.journal = Objects.requireNonNull(journal, "journal");
         this.clock = Objects.requireNonNull(clock, "clock");
         this.credentials = new AtomicReference<>(Objects.requireNonNull(credentials, "credentials"));
         this.settings = Objects.requireNonNull(settings, "settings");
+        this.draftSinceMillis = clock.millis();
     }
 
     /**
@@ -407,34 +430,62 @@ public final class ControlPlaneImpl implements ControlPlane {
         return e.bytes();
     }
 
+    /**
+     * One page of the retained audit, newest first.
+     *
+     * @param nextCursor pass as {@code cursor} for the next (older) page; 0 when there is none
+     */
+    public record AuditPage(List<AuditEntry> entries, long nextCursor) {
+        public AuditPage {
+            entries = List.copyOf(entries);
+        }
+    }
+
+    public static final int MAX_PAGE = 200;
+
+    /**
+     * The audit entries strictly older than revision {@code cursor} (0: newest), at most {@code limit}
+     * ({@code 1..}{@link #MAX_PAGE}). Shared by the dashboard RMI read and the HTTPS audit export.
+     */
+    public AuditPage auditPage(long cursor, int limit) {
+        if (limit < 1 || limit > MAX_PAGE || cursor < 0) {
+            throw new IllegalArgumentException("limit must be 1.." + MAX_PAGE + " and cursor nonnegative");
+        }
+        List<AuditEntry> page = new ArrayList<>();
+        long next = 0;
+        synchronized (writeLock) {
+            Iterator<AuditEntry> it = audit.descendingIterator();
+            while (it.hasNext()) {
+                AuditEntry e = it.next();
+                if (cursor != 0 && e.revision() >= cursor) {
+                    continue;
+                }
+                if (page.size() == limit) {
+                    next = page.get(page.size() - 1).revision();
+                    break;
+                }
+                page.add(e);
+            }
+        }
+        return new AuditPage(page, next);
+    }
+
     @Override
     public DashboardView getDashboard(DashboardRequest request) {
         return guard(() -> {
-            if (authorize(request == null ? null : request.credential(), READ, "getDashboard") == null) {
+            Caller caller = authorize(request == null ? null : request.credential(), READ, "getDashboard");
+            if (caller == null) {
                 return DashboardView.failure(ErrorCode.UNAUTHORIZED, "not authorized");
             }
-            if (request.limit() < 1 || request.limit() > 200 || request.cursor() < 0) {
+            if (request.limit() < 1 || request.limit() > MAX_PAGE || request.cursor() < 0) {
                 return DashboardView.failure(ErrorCode.INVALID, "limit must be 1..200 and cursor nonnegative");
             }
             if (!ready()) {
                 return DashboardView.failure(ErrorCode.UNAVAILABLE, "control plane not ready");
             }
-            List<AuditEntry> page = new ArrayList<>();
-            long next = 0;
-            synchronized (writeLock) {
-                Iterator<AuditEntry> it = audit.descendingIterator();
-                while (it.hasNext()) {
-                    AuditEntry e = it.next();
-                    if (request.cursor() != 0 && e.revision() >= request.cursor()) {
-                        continue;
-                    }
-                    if (page.size() == request.limit()) {
-                        next = page.get(page.size() - 1).revision();
-                        break;
-                    }
-                    page.add(e);
-                }
-            }
+            AuditPage auditPage = auditPage(request.cursor(), request.limit());
+            List<AuditEntry> page = auditPage.entries();
+            long next = auditPage.nextCursor();
             EnforcementSnapshot s = state;
             List<RestrictionView> restrictions = new ArrayList<>();
             for (Restriction r : s.restrictions()) {
@@ -445,12 +496,14 @@ public final class ControlPlaneImpl implements ControlPlane {
             List<Dto.AlertView> recentAlerts;
             synchronized (writeLock) {
                 recentAlerts = new ArrayList<>(alerts);
+                recentAlerts.addAll(refused.values());
             }
+            recentAlerts.sort(Comparator.comparingLong(Dto.AlertView::atMillis));
             if (recentAlerts.size() > request.limit()) {
                 recentAlerts = recentAlerts.subList(recentAlerts.size() - request.limit(), recentAlerts.size());
             }
             return new DashboardView(null, null, s.revision(), s.policy().revision(), s.policy().mode(), restrictions,
-                    page, next, recentAlerts);
+                    page, next, recentAlerts, caller.role(), sorted(s.workloads().keySet()), sorted(s.services().keySet()));
         }, m -> DashboardView.failure(ErrorCode.UNAVAILABLE, m));
     }
 
@@ -705,7 +758,7 @@ public final class ControlPlaneImpl implements ControlPlane {
                 return failure(ErrorCode.INVALID, "missing request");
             }
             String reason = "detector " + q.action() + " score=" + q.score();
-            return mutate(q.credential(), DETECT, "proposeAction", q.requestId(), reason, -1, w -> {
+            MutationResult r = mutate(q.credential(), DETECT, "proposeAction", q.requestId(), reason, -1, w -> {
                 w.u8(q.action().ordinal()).u8(q.selectors().size());
                 q.selectors().forEach(w::selector);
                 w.i64(q.ttlMillis()).i64(q.score()).u8(Math.min(q.signals().size(), 255));
@@ -713,7 +766,42 @@ public final class ControlPlaneImpl implements ControlPlane {
                 w.u8(Math.min(q.evidence().size(), 255));
                 q.evidence().forEach(w::text);
             }, (s, now) -> planDetectorAction(q, s, now));
+            if (!r.ok() && r.error() != ErrorCode.UNAUTHORIZED) {
+                rememberRefused(q, r);
+            }
+            return r;
         }, m -> failure(ErrorCode.UNAVAILABLE, m));
+    }
+
+    /**
+     * Keeps a refused proposal (alert-only, ineligible, conflicting, over the limit) for the dashboard, so it can
+     * show proposed and committed apart (spec §7.3). In memory only and bounded; only fields that pass the same
+     * shape checks as a committed alert are kept, so nothing unvalidated reaches a console.
+     */
+    private void rememberRefused(ActionProposal q, MutationResult r) {
+        if (q.action() == null || !Ids.isValid(q.requestId())) {
+            return; // the DTO's List.copyOf already rejected null elements
+        }
+        List<Selector> sel = q.selectors().stream().limit(Mutation.MAX_SELECTORS).toList();
+        List<String> signals = q.signals().stream().filter(x -> x != null && x.matches("[A-Z_]{1,32}"))
+                .limit(Mutation.DetectorAction.MAX_SIGNALS).toList();
+        List<String> evidence = q.evidence().stream().filter(x -> x != null && x.length() <= Mutation.DetectorAction.MAX_REF
+                && checkReason(x) == null).limit(Mutation.DetectorAction.MAX_EVIDENCE).toList();
+        String why = r.message() == null ? "" : r.message();
+        String outcome = Dto.AlertView.REFUSED + " " + r.error() + ": " + (why.length() <= 200 ? why : why.substring(0, 200));
+        String principal = q.credential().principal();
+        Dto.AlertView v = new Dto.AlertView(q.requestId(), principal, q.action(), sel, Math.max(0, q.score()), signals,
+                evidence, clock.millis(), 0, -1, outcome);
+        synchronized (writeLock) {
+            String key = principal + "/" + q.requestId();
+            refused.remove(key);
+            refused.put(key, v);
+            Iterator<String> it = refused.keySet().iterator();
+            while (refused.size() > MAX_REFUSED && it.hasNext()) {
+                it.next();
+                it.remove();
+            }
+        }
     }
 
     private Mutation planDetectorAction(ActionProposal q, EnforcementSnapshot s, long now) throws Invalid {
@@ -805,15 +893,84 @@ public final class ControlPlaneImpl implements ControlPlane {
         }
     }
 
+    /**
+     * Freezes a reviewed learning baseline (spec §3.2): one journaled mutation sets the approved edges to exactly
+     * {@code reviewedEdges} and switches to ENFORCE. Both the policy revision and the draft version must still be
+     * the reviewed ones, else CONFLICT ("reload and review"). Every reviewed edge must be approved already or be a
+     * draft candidate, so a freeze cannot smuggle in an edge nobody saw (use {@link #replacePolicy} for that). The
+     * draft lock is held from the version check through the commit, so no observation batch slips in between.
+     * Frozen candidates leave the draft; the draft version then increments.
+     */
     @Override
     public MutationResult freezeBaseline(FreezeRequest q) {
-        return notYet(q == null ? null : q.credential(), ADMINISTER, "freezeBaseline", "Task 9");
+        return guard(() -> {
+            if (q == null) {
+                return failure(ErrorCode.INVALID, "missing request");
+            }
+            List<Edge> sorted = new ArrayList<>(q.reviewedEdges());
+            sorted.sort(Dto.EDGE_ORDER);
+            // Lock order: draftLock, then writeLock (inside mutate). Nothing takes them the other way round.
+            synchronized (draftLock) {
+                MutationResult r = mutate(q.credential(), ADMINISTER, "freezeBaseline", q.requestId(), q.reason(),
+                        q.expectedPolicyRevision(), w -> {
+                            w.i64(q.expectedDraftVersion()).u16(Math.min(sorted.size(), 65_535));
+                            sorted.forEach(e -> w.id(e.sourceIdentity()).id(e.serviceId()));
+                        }, (s, now) -> planFreeze(q, s));
+                if (r.ok() && !r.replayed()) {
+                    draft.keySet().removeAll(q.reviewedEdges());
+                    draftVersion++;
+                    draftSinceMillis = clock.millis();
+                }
+                return r;
+            }
+        }, m -> failure(ErrorCode.UNAVAILABLE, m));
     }
 
-    private MutationResult notYet(Credential c, Set<Role> roles, String op, String task) {
-        return guard(() -> authorize(c, roles, op) == null ? failure(ErrorCode.UNAUTHORIZED, "not authorized")
-                : failure(ErrorCode.UNAVAILABLE, op + " is not implemented yet (" + task + ")"),
-                m -> failure(ErrorCode.UNAVAILABLE, m));
+    /** Caller holds draftLock and writeLock. */
+    private Mutation planFreeze(FreezeRequest q, EnforcementSnapshot s) throws Invalid {
+        if (q.expectedPolicyRevision() < 0 || q.expectedDraftVersion() < 0) {
+            throw new Invalid("expected policy revision and draft version are required");
+        }
+        if (q.expectedDraftVersion() != draftVersion) {
+            throw new Invalid(ErrorCode.CONFLICT, "learning draft is at version " + draftVersion + ", not "
+                    + q.expectedDraftVersion() + "; reload and review");
+        }
+        if (q.reviewedEdges().size() > Mutation.MAX_EDGES) {
+            throw new Invalid("at most " + Mutation.MAX_EDGES + " edges");
+        }
+        Set<Edge> edges = new HashSet<>(q.reviewedEdges());
+        if (edges.size() != q.reviewedEdges().size()) {
+            throw new Invalid("duplicate edge");
+        }
+        for (Edge e : edges) {
+            requireKnown(s, e.sourceIdentity(), e.serviceId());
+            if (!s.policy().isApproved(e) && !draft.containsKey(e)) {
+                throw new Invalid(e + " is neither approved nor a candidate of draft version " + draftVersion);
+            }
+        }
+        return new Mutation.FreezeBaseline(edges, draftVersion);
+    }
+
+    @Override
+    public Dto.LearningDraftView getLearningDraft(Dto.LearningDraftRequest request) {
+        return guard(() -> {
+            if (authorize(request == null ? null : request.credential(), READ, "getLearningDraft") == null) {
+                return Dto.LearningDraftView.failure(ErrorCode.UNAUTHORIZED, "not authorized");
+            }
+            if (!ready()) {
+                return Dto.LearningDraftView.failure(ErrorCode.UNAVAILABLE, "control plane not ready");
+            }
+            synchronized (draftLock) { // one consistent pair of draft version and policy revision
+                EnforcementSnapshot s = state;
+                Policy p = s.policy();
+                List<Edge> approved = p.approvedEdges().stream().sorted(Dto.EDGE_ORDER).toList();
+                List<Dto.Observation> candidates = new ArrayList<>(draft.values());
+                candidates.sort(Comparator.comparing(o -> o.edge().toString()));
+                return new Dto.LearningDraftView(null, null, s.revision(), p.revision(), draftVersion, p.mode(),
+                        sorted(p.pilotScope().sourceIdentities()), sorted(p.pilotScope().serviceIds()), approved,
+                        candidates, draftSinceMillis, draftDropped, observationsOutOfScope);
+            }
+        }, m -> Dto.LearningDraftView.failure(ErrorCode.UNAVAILABLE, m));
     }
 
     // ---- the write path ----
@@ -888,10 +1045,44 @@ public final class ControlPlaneImpl implements ControlPlane {
             return failure(ErrorCode.UNAVAILABLE, "journal write failed");
         }
         state = next;
+        notifyContainment(r);
         AuditEntry entry = remember(r, before);
         LOG.info(() -> "committed revision=" + revision + " op=" + entry.operation() + " actor=" + entry.actor()
                 + " role=" + entry.role() + " requestId=" + entry.requestId() + " " + entry.detail());
         return new MutationResult(null, null, revision, next.policy().revision(), false);
+    }
+
+    /**
+     * Registers a listener for committed quarantines and releases. It runs under the writer lock, in revision
+     * order, after the record is durable; it must not block (the sender only enqueues). A failing listener is
+     * logged and never undoes or fails the commit.
+     */
+    public void onContainment(Consumer<Containment> listener) {
+        containmentListeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    /** Caller holds {@code writeLock}; the record is already durable. */
+    private void notifyContainment(JournalRecord r) {
+        Containment c = switch (r.mutation()) {
+            case Mutation.Quarantine q -> new Containment(eastguard.common.NoticeOperation.QUARANTINE, r.revision(),
+                    r.atMillis(), q.selectors(), q.expiresAtMillis(), q.reason());
+            case Mutation.DetectorAction d when d.action() == Dto.ActionType.QUARANTINE -> new Containment(
+                    eastguard.common.NoticeOperation.QUARANTINE, r.revision(), r.atMillis(), d.selectors(),
+                    d.expiresAtMillis(), ReasonCode.RISK_SCORE);
+            case Mutation.Release x -> new Containment(eastguard.common.NoticeOperation.RELEASE, r.revision(),
+                    r.atMillis(), x.selectors(), 0, x.expired() ? ReasonCode.RESTRICTION_EXPIRED : ReasonCode.OPERATOR_ACTION);
+            default -> null; // policy edits and lease reductions reach enforcement points by polling
+        };
+        if (c == null) {
+            return;
+        }
+        for (Consumer<Containment> l : containmentListeners) {
+            try {
+                l.accept(c);
+            } catch (RuntimeException e) {
+                LOG.log(Level.WARNING, "containment listener failed; revision " + r.revision() + " stays committed", e);
+            }
+        }
     }
 
     /** Records the idempotency outcome and the audit entry of a committed record. Caller holds {@code writeLock}. */
@@ -908,7 +1099,8 @@ public final class ControlPlaneImpl implements ControlPlane {
         if (r.mutation() instanceof Mutation.DetectorAction d) {
             automatedAt.addLast(r.atMillis());
             alerts.addLast(new Dto.AlertView(r.requestId(), r.actor(), d.action(), d.selectors(), d.score(), d.signals(),
-                    d.evidence(), r.atMillis(), d.expiresAtMillis(), r.revision()));
+                    d.evidence(), r.atMillis(), d.expiresAtMillis(), r.revision(), Dto.AlertView.COMMITTED));
+            refused.remove(r.actor() + "/" + r.requestId()); // a retry that committed after an earlier refusal
             while (alerts.size() > settings.auditRetained()) {
                 alerts.removeFirst();
             }
@@ -924,13 +1116,11 @@ public final class ControlPlaneImpl implements ControlPlane {
             case Mutation.Quarantine q -> "selectors=" + q.selectors() + " expiresAt="
                     + Instant.ofEpochMilli(q.expiresAtMillis());
             case Mutation.Release r -> "selectors=" + r.selectors();
-            case Mutation.ReplacePolicy p -> {
-                Set<Edge> old = before.policy().approvedEdges();
-                List<String> diff = new ArrayList<>();
-                p.edges().stream().filter(e -> !old.contains(e)).map(e -> "+" + e).sorted().forEach(diff::add);
-                old.stream().filter(e -> !p.edges().contains(e)).map(e -> "-" + e).sorted().forEach(diff::add);
-                yield "edges=" + p.edges().size() + " diff=" + diff;
-            }
+            case Mutation.ReplacePolicy p -> "edges=" + p.edges().size() + " diff="
+                    + EdgeDiff.of(before.policy().approvedEdges(), p.edges());
+            case Mutation.FreezeBaseline f -> "edges=" + f.edges().size() + " diff="
+                    + EdgeDiff.of(before.policy().approvedEdges(), f.edges()) + " mode=ENFORCE draftVersion="
+                    + f.draftVersion();
             case Mutation.SetMode s -> "mode=" + s.mode() + " pilotSources=" + sorted(s.pilot().sourceIdentities())
                     + " pilotServices=" + sorted(s.pilot().serviceIds());
             case Mutation.SetLeaseDefaults l -> "defaultLeaseMs=" + l.defaultLease().toMillis();
@@ -1058,10 +1248,33 @@ public final class ControlPlaneImpl implements ControlPlane {
             System.err.println("journal belongs to cluster " + cp.snapshot().clusterId());
             System.exit(1);
         }
-        ControlServer server = ControlServer.start(cp, eastguard.tokensvc.TlsContextFactory.create(cfg.tls()),
-                cfg.rmiHost(), cfg.registryPort(), cfg.objectPort(), cfg.credentialsFile());
+        eastguard.bus.QuarantineSender notices = null;
+        if (cfg.multicast() != null) { // registered before serving, so no committed containment is missed
+            eastguard.bus.MulticastTransport transport = new eastguard.bus.MulticastTransport(cfg.multicast());
+            notices = eastguard.bus.QuarantineSender.fromConfig(cfg.notices(), cp.snapshot(), transport,
+                    Clock.systemUTC()).start();
+            cp.onContainment(notices::committed);
+            LOG.info("quarantine notices to " + cfg.multicast().group() + ":" + cfg.multicast().port() + " via "
+                    + transport.networkInterface().getName() + " ttl " + cfg.multicast().ttl());
+        } else {
+            LOG.warning("multicast.group is not configured: no quarantine notices; enforcement points poll only");
+        }
+        eastguard.bus.QuarantineSender sender = notices;
+        javax.net.ssl.SSLContext tls = eastguard.tokensvc.TlsContextFactory.create(cfg.tls());
+        ControlServer server = ControlServer.start(cp, tls, cfg.rmiHost(), cfg.registryPort(), cfg.objectPort(),
+                cfg.credentialsFile());
+        AuditHttpServer audit = cfg.audit() == null ? null : AuditHttpServer.start(cp, tls, cfg.audit());
+        if (audit == null) {
+            LOG.warning("audit.listen is not configured: no HTTPS audit export");
+        }
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (audit != null) {
+                audit.close();
+            }
             server.close();
+            if (sender != null) {
+                sender.close();
+            }
             try {
                 journal.close();
             } catch (IOException ignored) {

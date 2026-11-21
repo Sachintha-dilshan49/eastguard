@@ -30,7 +30,8 @@ final class TestPki {
     static final Path DIR = Path.of("out", "test-pki").toAbsolutePath();
     private static final List<String> REQUIRED = List.of("truststore.p12", "tokensvc.p12", "gateway-app-02.p12",
             "workload-web-01.p12", "workload-api-01.p12", "untrusted-web-01.p12", "workload-nosan.p12",
-            "workload-twosan.p12", "lease-signer.p12", "lease-k1.cer", "store.pass", "signer.pass");
+            "workload-twosan.p12", "lease-signer.p12", "lease-k1.cer", "store.pass", "signer.pass", "control.p12",
+            "console.p12");
     private static boolean ready;
 
     private TestPki() {

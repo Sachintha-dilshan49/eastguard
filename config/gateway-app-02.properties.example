@@ -57,3 +57,9 @@ telemetry.keyId=tk1
 telemetry.keyEnv=EASTGUARD_TELEMETRY_KEY_GW_APP_02
 telemetry.keyFile=keys/telemetry/gw-app-02.key
 telemetry.queue=4096
+
+# --- Quarantine notices (spec §5.4, §6.2): joined before the first sync, verified against the control keys in ---
+# --- the synced snapshot. A newer QUARANTINE blocks at once; any newer notice triggers an immediate sync.    ---
+multicast.group=239.20.20.20
+multicast.port=4446
+multicast.interface=127.0.0.1

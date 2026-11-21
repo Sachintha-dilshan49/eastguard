@@ -14,7 +14,14 @@ import eastguard.common.ReasonCode;
 import eastguard.common.ReplyStatus;
 import eastguard.common.SecretSource;
 import eastguard.common.Selector;
+import eastguard.common.PolicyMode;
+import eastguard.control.AuditClient;
+import eastguard.control.AuditHttpServer;
 import eastguard.control.ControlClient;
+import eastguard.handlers.PolicyView;
+import eastguard.handlers.ZtpUrlHandler;
+import java.net.URI;
+import java.net.URL;
 import eastguard.control.ControlConfig;
 import eastguard.control.ControlPlaneImpl;
 import eastguard.control.ControlServer;
@@ -44,10 +51,11 @@ import java.util.function.Supplier;
 import javax.net.ssl.SSLContext;
 
 /**
- * M5 demo, first part (spec §11): the control plane over secured RMI. An audited policy edit, a version
- * conflict, an idempotent retry, a quarantine that closes a live gateway session through the sync path, a
- * release after which the old lease fails on its watermark and a new lease works, and fail-closed behaviour when
- * the control plane goes away. The {@code ztp://} handler follows in Task 9.
+ * M5 demo (spec §11): the control plane over secured RMI. An audited policy edit, a version conflict, an
+ * idempotent retry, a quarantine that closes a live gateway session through the sync path, a release after which
+ * the old lease fails on its watermark and a new lease works, a typed {@code ztp://policy/app-02} read through
+ * the explicit URL handler, the paginated HTTPS audit export read with {@code HttpsURLConnection} and the console
+ * certificate, and fail-closed behaviour when the control plane goes away.
  *
  * <pre>
  * .\scripts\gen-certs.ps1          # once
@@ -70,10 +78,10 @@ public final class DemoM5_Rmi {
     public static void main(String[] args) throws Exception {
         System.setProperty("java.util.logging.SimpleFormatter.format", "        [log %4$s] %5$s%6$s%n");
         for (String f : new String[] {"keys/truststore.p12", "keys/control-credentials.properties",
-                "keys/telemetry/tokensvc.key"}) {
+                "keys/telemetry/tokensvc.key", "keys/console.p12"}) {
             if (!Files.isRegularFile(Path.of(f))) {
                 System.err.println(f + " not found. Run .\\scripts\\gen-certs.ps1 and .\\scripts\\gen-credentials.ps1"
-                        + " (or gen-credentials.ps1 -TelemetryKeys) first.");
+                        + " (or gen-credentials.ps1 -TelemetryKeys, gen-certs.ps1 -AddConsole) first.");
                 System.exit(2);
             }
         }
@@ -94,10 +102,13 @@ public final class DemoM5_Rmi {
         Dto.MutationResult b = cp.bootstrap(initial, "admin", "initial deny-by-default policy");
         title("Control plane: bootstrapped " + journalFile + " at revision " + b.revision() + " (approved: "
                 + initial.policy().approvedEdges() + ")");
-        ControlServer server = ControlServer.start(cp, TlsContextFactory.create(ccfg.tls()), ccfg.rmiHost(),
-                ccfg.registryPort(), ccfg.objectPort(), ccfg.credentialsFile());
+        SSLContext controlTls = TlsContextFactory.create(ccfg.tls());
+        ControlServer server = ControlServer.start(cp, controlTls, ccfg.rmiHost(), ccfg.registryPort(),
+                ccfg.objectPort(), ccfg.credentialsFile());
+        AuditHttpServer audit = AuditHttpServer.start(cp, controlTls, ccfg.audit());
         say("RMI registry " + ccfg.rmiHost() + ":" + ccfg.registryPort() + ", object port " + ccfg.objectPort()
-                + ", TLS 1.3 with client certificates on both, per-call API credentials");
+                + ", TLS 1.3 with client certificates on both, per-call API credentials; HTTPS audit export on "
+                + ccfg.audit().listen() + " for " + ccfg.audit().allowedClients());
 
         CountingDecisionSink sink = new CountingDecisionSink();
         try (EchoBackend echo = new EchoBackend(gcfg.backend().toSocketAddress(), 64).start();
@@ -195,8 +206,42 @@ public final class DemoM5_Rmi {
             GatewaySession again = fresh != null ? open(web, gateway, fresh.token()) : null;
             check(again != null && echo(again, "back"), "a newly issued lease is admitted and relays");
 
-            // 6. Fail closed.
-            title("6. The control plane goes away");
+            // 6. Typed ztp:// policy read.
+            title("6. Typed policy read: URL.of(URI.create(\"ztp://policy/app-02\"), handler)");
+            ZtpUrlHandler ztp = new ZtpUrlHandler(viewer::getPolicy); // the configured client; the URL picks no endpoint
+            Object content = URL.of(URI.create("ztp://policy/app-02"), ztp).getContent();
+            PolicyView pv = content instanceof PolicyView p ? p : null;
+            check(pv != null, "getContent() returned a typed " + PolicyView.class.getSimpleName() + ": " + pv);
+            check(pv != null && pv.allowedSources().equals(List.of("api-01", "web-01")) && pv.mode() == PolicyMode.ENFORCE,
+                    "app-02 allows " + (pv == null ? "?" : pv.allowedSources()) + " in ENFORCE mode");
+            for (String bad : new String[] {"ztp://10.0.0.9/app-02", "ztp://policy:1099/app-02",
+                    "ztp://policy/app-02?host=10.0.0.9", "ztp://policy/../keys"}) {
+                check(rejected(bad, ztp), bad + " rejected: only the fixed authority and one service ID");
+            }
+
+            // 7. HTTPS audit export.
+            title("7. HTTPS audit export on https://127.0.0.1:" + audit.port() + " (client certificate required)");
+            AuditClient console = new AuditClient(TlsContextFactory.create(new TlsContextFactory.Material(
+                    Path.of("keys/console.p12"), trust, pass)), TIMEOUT);
+            AuditClient.Response page = console.get(URI.create("https://127.0.0.1:" + audit.port() + "/audit?limit=3"));
+            check(page.status() == 200, "console certificate: GET /audit?limit=3 -> " + page.status() + " "
+                    + page.contentType() + " (HttpsURLConnection, normal hostname verification against the IP SAN)");
+            say(page.body().length() > 400 ? page.body().substring(0, 400) + "..." : page.body());
+            java.util.regex.Matcher next = java.util.regex.Pattern.compile("\"nextCursor\":(\\d+)").matcher(page.body());
+            if (next.find()) {
+                AuditClient.Response older = console.get(URI.create("https://127.0.0.1:" + audit.port()
+                        + "/audit?limit=3&cursor=" + next.group(1)));
+                check(older.status() == 200, "next page with cursor=" + next.group(1) + " -> " + older.status());
+            }
+            check(console.get(URI.create("https://127.0.0.1:" + audit.port() + "/health/ready")).status() == 200,
+                    "/health/ready -> 200 (journal open, bootstrapped)");
+            AuditClient wrongCert = new AuditClient(TlsContextFactory.create(new TlsContextFactory.Material(
+                    Path.of("keys/workload-web-01.p12"), trust, pass)), TIMEOUT);
+            int forbidden = wrongCert.get(URI.create("https://127.0.0.1:" + audit.port() + "/audit")).status();
+            check(forbidden == 403, "a trusted but unauthorized certificate (workload web-01) -> " + forbidden);
+
+            // 8. Fail closed.
+            title("8. The control plane goes away");
             server.close();
             long t1 = System.nanoTime();
             again.setReadTimeout(Duration.ofSeconds(15));
@@ -215,6 +260,7 @@ public final class DemoM5_Rmi {
             title("Gateway decisions by reason: " + sink + "; the backend accepted " + echo.accepted()
                     + " connections, all after ALLOW");
         } finally {
+            audit.close();
             server.close();
             journal.close();
         }
@@ -273,6 +319,15 @@ public final class DemoM5_Rmi {
             return Arrays.equals(msg, s.input().readNBytes(msg.length));
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    private static boolean rejected(String uri, ZtpUrlHandler h) {
+        try {
+            URL.of(URI.create(uri), h).getContent();
+            return false;
+        } catch (IOException e) { // MalformedURLException from URL.of
+            return true;
         }
     }
 

@@ -131,6 +131,40 @@ public final class RmiTest {
         }
     }
 
+    /** Task 9 DTOs (draft view, freeze, role and refused alerts in the dashboard) pass the real filters. */
+    public void testLearningDraftAndFreezeOverRmi() throws Exception {
+        try (Journal j = Journal.open(ControlFixtures.freshJournal())) {
+            ControlPlaneImpl impl = ControlPlaneImpl.open(j, fx.clock, fx.credentials, ControlPlaneImpl.Settings.defaults());
+            assertTrue(impl.bootstrap(LearningFreezeTest.learning(), "admin", "x").ok(), "boot");
+            ControlServer server = ControlServer.start(impl, TestPki.context("control"), "127.0.0.1", registryPort,
+                    objectPort, null);
+            try {
+                long t = fx.clock.millis();
+                assertTrue(client("detector").recordObservations("obs-1", List.of(new Dto.Observation(
+                        LearningFreezeTest.API_APP02, t, t, 4))).ok(), "observation");
+                assertEquals(ErrorCode.UNAVAILABLE, client("detector").proposeAction("p-1", Dto.ActionType.QUARANTINE,
+                        List.of(Selector.identity("web-01")), Duration.ofMinutes(1), 130, List.of("DECOY"),
+                        List.of("gw-app-02/0a/1")).error()); // alert-only
+                ControlClient admin = client("admin");
+                Dto.LearningDraftView v = admin.getLearningDraft();
+                assertTrue(v.ok(), "draft over RMI: " + v);
+                assertEquals(1, v.candidates().size());
+                Dto.DashboardView d = client("viewer").getDashboard(0, 10);
+                assertEquals(eastguard.control.Role.VIEWER, d.role());
+                assertEquals(List.of("api-01", "web-01"), d.workloads());
+                assertFalse(d.alerts().get(0).committed(), "refused proposal over RMI");
+                assertEquals(ErrorCode.CONFLICT, admin.freezeBaseline("f-0", v.policyRevision(), v.draftVersion() + 1,
+                        v.proposedBaseline(), "stale draft").error());
+                Dto.MutationResult f = admin.freezeBaseline("f-1", v.policyRevision(), v.draftVersion(),
+                        v.proposedBaseline(), "reviewed baseline");
+                assertTrue(f.ok(), "freeze over RMI: " + f);
+                assertEquals(eastguard.common.PolicyMode.ENFORCE, admin.getPolicy(null).mode());
+            } finally {
+                server.close();
+            }
+        }
+    }
+
     public void testRoleAndCredentialCheckedOverRmi() throws Exception {
         withServer(server -> {
             assertEquals(ErrorCode.UNAUTHORIZED, client("viewer").sync(0).error());

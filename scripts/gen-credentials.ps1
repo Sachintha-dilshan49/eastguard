@@ -16,6 +16,10 @@
 
 .PARAMETER Principals
   name:ROLE pairs. Roles: VIEWER, OPERATOR, ADMIN, GATEWAY, ISSUER, DETECTOR.
+.PARAMETER Add
+  name:ROLE pairs to add to an existing credentials file, e.g.
+  -Add console-viewer:VIEWER,console-operator:OPERATOR,console-admin:ADMIN
+  Existing principals, digests and secret files are kept; a name that already exists is refused.
 .PARAMETER Force
   Replace all existing credentials.
 .PARAMETER Rotate
@@ -34,7 +38,9 @@
 param(
     [string]$OutDir,
     [string[]]$Principals = @('admin:ADMIN', 'operator:OPERATOR', 'viewer:VIEWER', 'gw-app-02:GATEWAY',
-        'tokensvc:ISSUER', 'detector:DETECTOR'),
+        'tokensvc:ISSUER', 'detector:DETECTOR', 'console-viewer:VIEWER', 'console-operator:OPERATOR',
+        'console-admin:ADMIN'),
+    [string[]]$Add,
     [switch]$Force,
     [string]$Rotate,
     [string]$Retire,
@@ -148,6 +154,25 @@ if ($TelemetryKeys) {
     exit 0
 }
 
+if ($Add) {
+    if ($table.Count -eq 0) { throw "$credFile does not exist; run this script without -Add first" }
+    $new = [ordered]@{}
+    # "-Add a:B,c:D" arrives as one string through powershell -File; split it either way.
+    foreach ($entry in @($Add | ForEach-Object { $_ -split ',' } | Where-Object { $_ })) {
+        $name, $role = $entry -split ':', 2
+        if ($name -notmatch $idPattern) { throw "invalid principal name '$name'" }
+        if ($roles -notcontains $role) { throw "invalid role '$role' for $name (one of $($roles -join ', '))" }
+        if ($table.Contains($name) -or $new.Contains($name)) { throw "principal $name already exists (use -Rotate)" }
+        $new[$name] = $role
+    }
+    foreach ($name in $new.Keys) {   # validated all first: nothing is written for a bad list
+        $table[$name] = @{ role = $new[$name]; digests = @(New-Secret $name); enabled = $true }
+        Write-Output "  api\$name.secret  ($($new[$name]))"
+    }
+    Write-Credentials $table
+    Write-Output "added $($new.Count) principal(s) to $credFile"
+    exit 0
+}
 if ($Rotate) {
     Require-Known $table $Rotate
     $table[$Rotate].digests = @(New-Secret $Rotate) + $table[$Rotate].digests

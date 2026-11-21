@@ -99,6 +99,7 @@ public final class TokenServer implements AutoCloseable {
 
     private volatile SSLServerSocket server;
     private final java.util.List<AutoCloseable> owned = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private volatile StateSync sync; // set by create()
     private volatile TelemetrySender telemetry;
     private volatile Clock reportClock = Clock.systemUTC();
     private Thread acceptor;
@@ -126,19 +127,52 @@ public final class TokenServer implements AutoCloseable {
     /**
      * Wires a server from configuration with authoritative state from the control plane: a {@link StateSync}
      * polls over RMI on its own thread (started here), and issuance is refused until the first valid sync and
-     * whenever freshness has expired. The token service's TLS certificate is also its RMI client identity.
+     * whenever freshness has expired. The token service's TLS certificate is also its RMI client identity. With
+     * {@code multicast.*} set, a quarantine notice stops matching issuance at once.
      */
     public static TokenServer create(TokenConfig cfg, Clock clock, InetSocketAddress bind) {
         SSLContext ctx = TlsContextFactory.create(cfg.tls());
-        StateSync sync = new StateSync("tokensvc", new ControlClient(cfg.control(), ctx)::sync, cfg.sync(),
-                System::nanoTime);
+        eastguard.bus.NoticeTransport notices = null;
+        if (cfg.multicast() != null) {
+            try {
+                notices = new eastguard.bus.MulticastTransport(cfg.multicast());
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException("multicast interface " + cfg.multicast().networkInterface(), e);
+            }
+        }
+        return create(cfg, ctx, clock, bind, new ControlClient(cfg.control(), ctx)::sync, notices);
+    }
+
+    /**
+     * The same wiring with a caller-supplied sync source and notice transport (demos run the control plane
+     * in-process and may inject transport faults). {@code notices == null}: polling only.
+     */
+    public static TokenServer create(TokenConfig cfg, SSLContext ctx, Clock clock, InetSocketAddress bind,
+            StateSync.Source source, eastguard.bus.NoticeTransport notices) {
+        StateSync sync = new StateSync("tokensvc", source, cfg.sync(), System::nanoTime);
         TokenServer server = create(cfg, clock, bind, ctx, sync);
         server.owned.add(sync);
+        server.sync = sync;
         if (cfg.telemetry() != null) {
             server.reportTo(TelemetrySender.create(cfg.sync().clusterId(), cfg.telemetry()), clock);
         }
+        if (notices != null) {
+            try { // joined before the first sync
+                server.owned.add(eastguard.bus.QuarantineListener.forSync("tokensvc", notices, sync, clock));
+            } catch (IOException e) {
+                server.close();
+                throw new java.io.UncheckedIOException("cannot join the quarantine notice group", e);
+            }
+        } else {
+            LOG.warning("multicast.group is not configured: quarantine reaches the token service by polling only");
+        }
         sync.start();
         return server;
+    }
+
+    /** The state sync wired by {@link #create}, or {@code null} for a server built with a fixed state. */
+    public StateSync stateSync() {
+        return sync;
     }
 
     public static TokenServer create(TokenConfig cfg, Clock clock) {

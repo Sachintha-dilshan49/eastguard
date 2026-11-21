@@ -22,3 +22,7 @@ bootstrap.pilot.sources=
 bootstrap.pilot.services=
 bootstrap.tokenKeys=lease-k1
 bootstrap.tokenKey.lease-k1.cert=keys/lease-k1.cer
+# Control-plane notice key (spec §5.4), separate from the lease key: receivers trust multicast notices signed by
+# the keys published here. Create it with  .\scripts\gen-certs.ps1 -AddControlSigner
+bootstrap.controlKeys=control-k1
+bootstrap.controlKey.control-k1.cert=keys/control-k1.cer

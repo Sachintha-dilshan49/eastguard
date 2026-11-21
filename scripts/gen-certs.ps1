@@ -16,9 +16,13 @@
     detector.p12            threat detector SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:detector
     workload-web-01.p12     workload        SAN uri:urn:eastguard:workload:web-01
     workload-api-01.p12     workload        SAN uri:urn:eastguard:workload:api-01
+    console.p12             operator console (dashboard, audit client) SAN uri:urn:eastguard:console:dashboard,
+                            clientAuth only
     untrusted-web-01.p12    workload web-01 issued by the untrusted CA (must fail the TLS handshake)
     lease-signer.p12        Ed25519 lease-signing key, alias lease-k1
     lease-k1.cer            certificate carrying the lease verification public key
+    control-signer.p12      Ed25519 control-plane notice signer, alias control-k1 (not the lease key)
+    control-k1.cer          certificate carrying the notice verification public key (published in the snapshot)
   With -TestFixtures, also:
     workload-nosan.p12      CN=web-01 and no SAN (the CN must never be used as an identity)
     workload-twosan.p12     two workload URI SANs (ambiguous identity)
@@ -29,6 +33,7 @@
   Passwords are never printed and never passed on a command line (keytool reads them with :env):
     runtime TLS stores   $env:EASTGUARD_STORE_PASS   else <OutDir>\store.pass
     lease signer store   $env:EASTGUARD_SIGNER_PASS  else <OutDir>\signer.pass
+    control signer store $env:EASTGUARD_CONTROL_SIGNER_PASS  else <OutDir>\control-signer.pass
     CA stores            $env:EASTGUARD_CA_PASS      else <OutDir>\ca\ca.pass
   A missing password file is created with 32 random bytes (base64url) and its ACL is restricted to the
   current user. Keep -OutDir inside a git-ignored directory.
@@ -42,6 +47,12 @@
 .PARAMETER AddComponent
   Issue only one more component certificate (serverAuth+clientAuth, SAN uri:urn:eastguard:component:<name>)
   from the existing demo CA, e.g. -AddComponent detector after upgrading from an older key set.
+.PARAMETER AddConsole
+  Issue only the operator console certificate (console.p12, clientAuth only, SAN uri:urn:eastguard:console:dashboard)
+  from the existing demo CA. Refuses to replace an existing one unless -Force is given. Nothing else is touched.
+.PARAMETER AddControlSigner
+  Create only the control-plane notice signer (control-signer.p12, control-k1.cer) in an existing key set.
+  Refuses to replace an existing signer unless -Force is given. Nothing else is touched.
 .PARAMETER Force
   Replace existing keystores and certificates. Existing password files are kept and reused.
 #>
@@ -50,7 +61,9 @@ param(
     [ValidateRange(1, 3650)][int]$ValidityDays = 365,
     [switch]$TestFixtures,
     [switch]$Force,
-    [string]$AddComponent
+    [string]$AddComponent,
+    [switch]$AddControlSigner,
+    [switch]$AddConsole
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3
@@ -166,6 +179,25 @@ function New-Workload([string]$Name, [string]$San, [string]$CaStore, [string]$Ca
     New-Leaf $Name "CN=$Cn, O=EastGuard Demo" $ext $CaStore $CaCer
 }
 
+# Operator console (spec §7.3 "dashboard client certificate"): a TLS client only, with its own identity URI, so the
+# HTTPS audit export can authorize it by name and no workload or component certificate doubles as a console.
+function New-Console {
+    New-Leaf 'console' 'CN=console, O=EastGuard Demo' @('san=uri:urn:eastguard:console:dashboard', 'eku=clientAuth') `
+        $caStore $caCer
+}
+
+# Ed25519 control-plane notice signer (spec §5.4), separate from the lease signer: its own store, alias, password.
+function New-ControlSigner {
+    $store = Join-Path $OutDir 'control-signer.p12'
+    $cer = Join-Path $OutDir 'control-k1.cer'
+    $cs = @('-storetype', 'PKCS12', '-keystore', $store, '-storepass:env', 'EG_GEN_CONTROL')
+    Invoke-Keytool (@('-genkeypair') + $cs + @('-keypass:env', 'EG_GEN_CONTROL', '-alias', 'control-k1',
+            '-keyalg', 'Ed25519', '-dname', 'CN=EastGuard control signer control-k1, O=EastGuard Demo',
+            '-validity', "$ValidityDays"))
+    Invoke-Keytool (@('-exportcert', '-rfc') + $cs + @('-alias', 'control-k1', '-file', $cer))
+    Write-Output '  control-signer.p12, control-k1.cer'
+}
+
 # ---- main ----
 
 $script:Keytool = Find-Keytool
@@ -195,6 +227,49 @@ if ($AddComponent) {
     }
     exit 0
 }
+if ($AddConsole) {
+    # Only the console certificate from the existing demo CA; no other key, certificate or password is touched.
+    $caStore = Join-Path $caDir 'ca.p12'
+    $caCer = Join-Path $OutDir 'ca.cer'
+    if (-not (Test-Path -LiteralPath $caStore) -or -not (Test-Path -LiteralPath $caCer)) {
+        throw "no demo CA under $OutDir; run this script without -AddConsole first"
+    }
+    $target = Join-Path $OutDir 'console.p12'
+    if (Test-Path -LiteralPath $target) {
+        if (-not $Force) { throw "$target already exists (use -Force to replace it)" }
+        Remove-Item -LiteralPath $target -Force
+    }
+    $env:EG_GEN_STORE = Get-Secret 'EASTGUARD_STORE_PASS' (Join-Path $OutDir 'store.pass')
+    $env:EG_GEN_CA = Get-Secret 'EASTGUARD_CA_PASS' (Join-Path $caDir 'ca.pass')
+    try {
+        New-Item -ItemType Directory -Force -Path $work | Out-Null
+        New-Console
+        Protect-File $target
+    } finally {
+        Remove-Item Env:EG_GEN_STORE, Env:EG_GEN_CA -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
+    }
+    exit 0
+}
+if ($AddControlSigner) {
+    # Only the control-plane notice signer; no other key, certificate or password is touched.
+    if (-not (Test-Path -LiteralPath $OutDir)) { throw "$OutDir does not exist; run this script without switches first" }
+    $targets = @((Join-Path $OutDir 'control-signer.p12'), (Join-Path $OutDir 'control-k1.cer'))
+    foreach ($t in $targets) {
+        if (Test-Path -LiteralPath $t) {
+            if (-not $Force) { throw "$t already exists (use -Force to replace the control signer)" }
+            Remove-Item -LiteralPath $t -Force
+        }
+    }
+    $env:EG_GEN_CONTROL = Get-Secret 'EASTGUARD_CONTROL_SIGNER_PASS' (Join-Path $OutDir 'control-signer.pass')
+    try {
+        New-ControlSigner
+        Protect-File (Join-Path $OutDir 'control-signer.p12')
+    } finally {
+        Remove-Item Env:EG_GEN_CONTROL -ErrorAction SilentlyContinue
+    }
+    exit 0
+}
 New-Item -ItemType Directory -Force -Path $OutDir, $caDir | Out-Null
 
 $existing = @(Get-ChildItem -LiteralPath $OutDir, $caDir -File |
@@ -208,6 +283,7 @@ if ($existing.Count -gt 0) {
 
 $env:EG_GEN_STORE = Get-Secret 'EASTGUARD_STORE_PASS' (Join-Path $OutDir 'store.pass')
 $env:EG_GEN_SIGNER = Get-Secret 'EASTGUARD_SIGNER_PASS' (Join-Path $OutDir 'signer.pass')
+$env:EG_GEN_CONTROL = Get-Secret 'EASTGUARD_CONTROL_SIGNER_PASS' (Join-Path $OutDir 'control-signer.pass')
 $env:EG_GEN_CA = Get-Secret 'EASTGUARD_CA_PASS' (Join-Path $caDir 'ca.pass')
 try {
     New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -233,6 +309,7 @@ try {
     New-Workload 'workload-web-01' 'uri:urn:eastguard:workload:web-01' $caStore $caCer 'web-01'
     New-Workload 'workload-api-01' 'uri:urn:eastguard:workload:api-01' $caStore $caCer 'api-01'
     New-Workload 'untrusted-web-01' 'uri:urn:eastguard:workload:web-01' $badStore $badCer 'web-01'
+    New-Console
     if ($TestFixtures) {
         New-Workload 'workload-nosan' '' $caStore $caCer 'web-01'
         New-Workload 'workload-twosan' 'uri:urn:eastguard:workload:web-01,uri:urn:eastguard:workload:api-01' `
@@ -246,10 +323,11 @@ try {
             '-validity', "$ValidityDays"))
     Invoke-Keytool (@('-exportcert', '-rfc') + $ss + @('-alias', 'lease-k1', '-file', (Join-Path $OutDir 'lease-k1.cer')))
     Write-Output '  lease-signer.p12, lease-k1.cer'
+    New-ControlSigner
 
     Get-ChildItem -LiteralPath $OutDir, $caDir -File -Filter *.p12 | ForEach-Object { Protect-File $_.FullName }
     Write-Output 'done'
 } finally {
-    Remove-Item Env:EG_GEN_STORE, Env:EG_GEN_SIGNER, Env:EG_GEN_CA -ErrorAction SilentlyContinue
+    Remove-Item Env:EG_GEN_STORE, Env:EG_GEN_SIGNER, Env:EG_GEN_CONTROL, Env:EG_GEN_CA -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
 }

@@ -177,6 +177,17 @@ public final class ControlClient {
                 score, signals, evidence)));
     }
 
+    public Dto.LearningDraftView getLearningDraft() throws IOException {
+        return call(cp -> cp.getLearningDraft(new Dto.LearningDraftRequest(credential)));
+    }
+
+    /** Administrator: freeze exactly {@code reviewedEdges} as the allow-list and switch to ENFORCE. */
+    public MutationResult freezeBaseline(String requestId, long expectedPolicyRevision, long expectedDraftVersion,
+            List<Edge> reviewedEdges, String reason) throws IOException {
+        return call(cp -> cp.freezeBaseline(new Dto.FreezeRequest(credential, requestId, expectedPolicyRevision,
+                expectedDraftVersion, reviewedEdges, reason)));
+    }
+
     public MutationResult setLeaseDefaults(String requestId, long expectedPolicyRevision, Duration lease, String reason)
             throws IOException {
         return call(cp -> cp.setLeaseDefaults(new Dto.SetLeaseDefaultsRequest(credential, requestId,

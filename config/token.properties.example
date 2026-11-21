@@ -44,3 +44,9 @@ telemetry.keyId=tk1
 telemetry.keyEnv=EASTGUARD_TELEMETRY_KEY_TOKENSVC
 telemetry.keyFile=keys/telemetry/tokensvc.key
 telemetry.queue=1024
+
+# --- Quarantine notices (spec §5.4, §6.2): joined before the first sync, verified against the control keys in ---
+# --- the synced snapshot. A newer QUARANTINE blocks at once; any newer notice triggers an immediate sync.    ---
+multicast.group=239.20.20.20
+multicast.port=4446
+multicast.interface=127.0.0.1

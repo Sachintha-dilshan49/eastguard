@@ -74,6 +74,10 @@ public final class TelemetryProducerTest {
                 assertEquals(9002, a.dstPort());
                 assertNull(b.sourceIdentity());
                 assertEquals(ReasonCode.INVALID_TOKEN, b.reason());
+                long end = System.nanoTime() + 2_000_000_000L; // the counter moves just after the send returns
+                while (s.stats().sent() < 2 && System.nanoTime() < end) {
+                    Thread.onSpinWait();
+                }
                 assertEquals(2, s.stats().sent());
             } finally {
                 s.close();

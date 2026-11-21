@@ -46,7 +46,15 @@ This uses JDK `keytool` only. It finds keytool via `JAVA_HOME`, then PATH, then 
 demo CA, a separate untrusted CA, PKCS#12 stores for the token service, gateway `app-02`, the control plane, the
 threat detector, and workloads `web-01` / `api-01` (URI SAN `urn:eastguard:workload:<id>`), a `web-01`
 look-alike signed by the
-untrusted CA, and the Ed25519 lease-signing key `lease-k1`.
+untrusted CA, the Ed25519 lease-signing key `lease-k1`, and a separate Ed25519 control-plane notice signer
+`control-k1` (`keys\control-signer.p12`, public key `keys\control-k1.cer`, published in the snapshot through
+`bootstrap.controlKeys`).
+
+On a key set made before Task 8, add only the notice signer; nothing else is touched:
+
+```powershell
+.\scripts\gen-certs.ps1 -AddControlSigner     # refuses to replace an existing signer without -Force
+```
 
 Passwords never appear on a command line or in the output:
 
@@ -54,6 +62,7 @@ Passwords never appear on a command line or in the output:
 |-------|----------------------|------------------------------------|
 | Runtime TLS stores + trust store | `EASTGUARD_STORE_PASS` | `keys\store.pass` |
 | Lease signer | `EASTGUARD_SIGNER_PASS` | `keys\signer.pass` |
+| Control-plane notice signer | `EASTGUARD_CONTROL_SIGNER_PASS` | `keys\control-signer.pass` |
 | CA stores (`keys\ca\`, used only by the script) | `EASTGUARD_CA_PASS` | `keys\ca\ca.pass` |
 
 ## Token service and M2 demo
@@ -114,7 +123,11 @@ plane listens on 127.0.0.1:1099/1100 with a fresh journal under `out\demo-m5`. T
 3. retries a request whose reply was "lost" (no duplicate commit), and reuses its ID with a different payload (INVALID);
 4. quarantines `web-01`, which closes its live session through sync while `api-01`'s session continues;
 5. releases `web-01`: the old lease fails on its watermark and a fresh lease works;
-6. stops the control plane: sessions close and issuance and admission stop when the 5 s freshness runs out.
+6. reads `ztp://policy/app-02` as a typed `PolicyView` through the explicit URL handler, and shows that URLs naming
+   another host, a port, a query or a path are rejected;
+7. reads the HTTPS audit export page by page with `HttpsURLConnection` and the console certificate (normal
+   hostname verification), and shows a workload certificate getting 403;
+8. stops the control plane: sessions close and issuance and admission stop when the 5 s freshness runs out.
 
 It exits 0 when every check passes.
 
@@ -167,6 +180,66 @@ Sending never blocks: a full queue drops events and counts them, and the sequenc
 detector. Automation is off in both `detector.properties.example` and `control.properties.example`
 (alert-only). Turn on `automation.leaseReduction` / `automation.quarantine` in **both** files to let the
 detector propose actions and the control plane commit them. See `docs/DEVIATIONS.md` (Task 7).
+
+## Multicast quarantine bus and M4 demo
+
+```powershell
+java -cp out eastguard.demos.DemoM4_Multicast            # real multicast 239.20.20.20:4446 on 127.0.0.1
+java -cp out eastguard.demos.DemoM4_Multicast --memory   # in-memory transport instead
+```
+
+After a quarantine or release is committed and forced to the journal, the control plane multicasts the same
+Ed25519-signed EGC1 notice three times (`multicast.*` and `notice.*` in `control.properties.example`). Gateways
+and the token service join the group before their first sync and verify the cluster, the control key published
+in the snapshot, the signature, the bounds and a ±30 s timestamp. A newer QUARANTINE blocks at once and closes
+matching gateway sessions; any newer notice triggers an immediate sync, and new issuance and admissions pause until
+it arrives. A RELEASE only triggers a sync: blocks are cleared by a covering snapshot, never by a notice.
+
+`DemoM4_Multicast` runs three gateways and the token service as receivers. It measures commit → matching
+session closed over 20 quarantines (spec target p95 < 100 ms; about 3 ms on loopback here), then shows that
+duplicates are applied once, a dropped notice still converges through sync, a late old notice does not roll
+state back, a RELEASE clears nothing until the snapshot arrives, and the released workload's old lease is
+rejected by the watermark while a new lease works. It exits 0 when every check passes. It needs `keys\` from
+`gen-certs.ps1` (including the notice signer) and uses ports 7002 (backend) and 4446 (multicast). See
+`docs/DEVIATIONS.md` (Task 8), including the multicast qualification status.
+
+## Operator console, audit export and `ztp://`
+
+The console has its own client certificate and API credentials. Both scripts add them without touching
+existing keys:
+
+```powershell
+.\scripts\gen-certs.ps1 -AddConsole      # keys\console.p12: clientAuth only, SAN urn:eastguard:console:dashboard
+.\scripts\gen-credentials.ps1 -Add console-viewer:VIEWER,console-operator:OPERATOR,console-admin:ADMIN
+```
+
+A fresh `gen-certs.ps1` / `gen-credentials.ps1` run creates them as well.
+
+```powershell
+# Live: against the running control plane (control.principal picks the role; console-operator by default)
+java -cp out eastguard.dashboard.DashboardApp --config config/dashboard.properties.example
+# Demo profile: labeled, read-only fixture scenarios; no network, no actions
+java -cp out eastguard.dashboard.DashboardApp --demo
+```
+
+The console has five tabs. **Topology** shows workloads, services, approved edges, candidates, denials,
+quarantine overlays and a quarantined identity's *potential blast radius*, each with a symbol and a text label
+as well as a colour. **Alerts** separates committed actions from refused proposals. **Policy and learning**
+shows the mode and revisions and lets you review the draft, preview the exact edge diff and freeze it.
+**Quarantine** lists selector type, reason, expiry and overlaps, and quarantine and release both ask for a
+reason and a confirmation. **Audit** lists the audit trail.
+
+All RMI runs on one background thread with at most one poll outstanding. When the control plane is slow or
+gone, a banner marks the view STALE or DISCONNECTED and every edit is disabled. Buttons the console's role may
+not use are disabled too, and the control plane still checks the role on every call.
+
+The control plane serves `https://127.0.0.1:9443` (`audit.*` in `control.properties.example`) with `/audit`
+(paginated: `?limit=1..200&cursor=<revision>`), `/metrics`, `/health/live` and `/health/ready`. It is
+read-only and requires a client certificate whose URI SAN is in `audit.allowedClients`.
+
+`ztp://policy/<serviceId>` is read with an explicit handler and never registered globally:
+`URL.of(URI.create("ztp://policy/app-02"), new ZtpUrlHandler(client::getPolicy)).getContent()` returns a typed
+`eastguard.handlers.PolicyView`. See `docs/DEVIATIONS.md` (Task 9).
 
 ## Writing tests
 

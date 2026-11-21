@@ -49,7 +49,12 @@ public final class AllTests {
             TelemetryVerifierTest.class,
             RiskEngineTest.class,
             DetectorControlTest.class,
-            DetectorPipelineTest.class);
+            DetectorPipelineTest.class,
+            LearningFreezeTest.class,
+            AuditHttpTest.class,
+            ZtpHandlerTest.class,
+            DashboardControllerTest.class,
+            QuarantineBusTest.class);
 
     /** Strong reference: java.util.logging only holds loggers weakly, which would drop the level. */
     private static final Logger QUIET = Logger.getLogger("eastguard");

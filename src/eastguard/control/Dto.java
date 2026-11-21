@@ -120,18 +120,28 @@ public final class Dto {
             long revision) implements Serializable {
     }
 
-    /** @param nextCursor pass as {@code cursor} for the next (older) page; 0 when there is none */
+    /**
+     * @param nextCursor pass as {@code cursor} for the next (older) page; 0 when there is none
+     * @param alerts     committed detector actions and refused detector proposals, oldest first
+     * @param role       the caller's own role, so a console can disable what it may not do (the server still
+     *                   authorizes every call)
+     * @param workloads  known workload identities, sorted (topology)
+     * @param services   known service IDs, sorted (topology)
+     */
     public record DashboardView(ErrorCode error, String message, long revision, long policyRevision, PolicyMode mode,
-            List<RestrictionView> restrictions, List<AuditEntry> audit, long nextCursor, List<AlertView> alerts)
-            implements Serializable {
+            List<RestrictionView> restrictions, List<AuditEntry> audit, long nextCursor, List<AlertView> alerts,
+            Role role, List<String> workloads, List<String> services) implements Serializable {
         public DashboardView {
             restrictions = copy(restrictions);
             audit = copy(audit);
             alerts = copy(alerts);
+            workloads = copy(workloads);
+            services = copy(services);
         }
 
         public static DashboardView failure(ErrorCode code, String message) {
-            return new DashboardView(code, message, -1, -1, null, List.of(), List.of(), 0, List.of());
+            return new DashboardView(code, message, -1, -1, null, List.of(), List.of(), 0, List.of(), null, List.of(),
+                    List.of());
         }
 
         public boolean ok() {
@@ -206,23 +216,87 @@ public final class Dto {
         }
     }
 
-    /** A committed detector action with its alert (spec §3.1 Alert, §7.3). */
+    /**
+     * A detector alert as the control plane saw it (spec §3.1 Alert, §7.3): either a committed action
+     * ({@link #COMMITTED}, with its commit {@code revision} and expiry) or a proposal the control plane refused
+     * ({@code outcome} starts with {@link #REFUSED}; {@code revision} -1, {@code expiresAtMillis} 0).
+     */
     public record AlertView(String id, String actor, ActionType action, List<Selector> selectors, int score,
-            List<String> signals, List<String> evidence, long atMillis, long expiresAtMillis, long revision)
-            implements Serializable {
+            List<String> signals, List<String> evidence, long atMillis, long expiresAtMillis, long revision,
+            String outcome) implements Serializable {
+        public static final String COMMITTED = "COMMITTED";
+        public static final String REFUSED = "REFUSED";
+
         public AlertView {
             selectors = copy(selectors);
             signals = copy(signals);
             evidence = copy(evidence);
         }
+
+        public boolean committed() {
+            return COMMITTED.equals(outcome);
+        }
     }
 
+    /**
+     * Commit a reviewed learning draft (spec §3.2). {@code reviewedEdges} is the <em>complete</em> new allow-list.
+     * Every edge must already be approved or be a candidate of the draft at {@code expectedDraftVersion}, and the
+     * policy must still be at {@code expectedPolicyRevision}. One journaled mutation sets exactly these edges
+     * and switches to ENFORCE; a stale version returns CONFLICT.
+     */
     public record FreezeRequest(Credential credential, String requestId, long expectedPolicyRevision,
             long expectedDraftVersion, List<Edge> reviewedEdges, String reason) implements Serializable {
         public FreezeRequest {
             reviewedEdges = copy(reviewedEdges);
         }
     }
+
+    public record LearningDraftRequest(Credential credential) implements Serializable {
+    }
+
+    /**
+     * The learning draft for review (spec §3.2). Candidates are observations, not permissions, and the draft may
+     * be incomplete: UDP loss and restarts omit observations ({@link #INCOMPLETE}).
+     *
+     * @param approved          the current allow-list
+     * @param candidates        observed pilot admissions outside it
+     * @param draftSinceMillis  when this draft started collecting (control-plane start or the last freeze)
+     * @param droppedCandidates distinct candidates dropped because the draft was full
+     * @param outOfScope        observations ignored because they were not pilot edges when they arrived
+     */
+    public record LearningDraftView(ErrorCode error, String message, long revision, long policyRevision,
+            long draftVersion, PolicyMode mode, List<String> pilotSources, List<String> pilotServices,
+            List<Edge> approved, List<Observation> candidates, long draftSinceMillis, long droppedCandidates,
+            long outOfScope) implements Serializable {
+        public static final String INCOMPLETE = "Observations may be incomplete: UDP loss, detector or control-plane"
+                + " restarts and the draft size limit omit candidates. A missing edge is not evidence of no traffic.";
+
+        public LearningDraftView {
+            pilotSources = copy(pilotSources);
+            pilotServices = copy(pilotServices);
+            approved = copy(approved);
+            candidates = copy(candidates);
+        }
+
+        public static LearningDraftView failure(ErrorCode code, String message) {
+            return new LearningDraftView(code, message, -1, -1, -1, null, List.of(), List.of(), List.of(), List.of(),
+                    0, 0, 0);
+        }
+
+        public boolean ok() {
+            return error == null;
+        }
+
+        /** Approved edges plus every candidate: the default reviewed set, before an administrator deselects. */
+        public List<Edge> proposedBaseline() {
+            java.util.Set<Edge> s = new java.util.HashSet<>(approved);
+            candidates.forEach(o -> s.add(o.edge()));
+            return s.stream().sorted(EDGE_ORDER).toList();
+        }
+    }
+
+    /** Stable display and digest order of edges. */
+    public static final java.util.Comparator<Edge> EDGE_ORDER = java.util.Comparator.comparing(Edge::toString);
 
     private static <T> List<T> copy(List<T> list) {
         return list == null ? List.of() : List.copyOf(list);

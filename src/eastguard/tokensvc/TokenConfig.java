@@ -6,6 +6,7 @@ import eastguard.common.Ids;
 import eastguard.common.SecretSource;
 import eastguard.common.TelemetrySender;
 import eastguard.control.ControlClient;
+import eastguard.bus.MulticastSettings;
 import eastguard.control.StateSync;
 import java.nio.file.Path;
 import java.util.Objects;
@@ -29,6 +30,7 @@ import java.util.Objects;
  * state.pollMillis, state.maxAgeMillis    see {@link StateSync.Settings}
  * telemetry.*                             optional UDP producer for selected denials, see
  *                                         {@link TelemetrySender.Settings}
+ * multicast.*                             optional quarantine notices, see {@link MulticastSettings}
  * </pre>
  *
  * Policy, workloads, services and the published lease keys come from the control plane; the lease length is a
@@ -36,7 +38,8 @@ import java.util.Objects;
  */
 public record TokenConfig(Endpoint listen, TlsContextFactory.Material tls, Path signerStore, String signerAlias,
         String keyId, SecretSource signerPassword, TokenServer.Limits limits, int issuePerIdentityPerSecond,
-        ControlClient.Settings control, StateSync.Settings sync, TelemetrySender.Settings telemetry) {
+        ControlClient.Settings control, StateSync.Settings sync, TelemetrySender.Settings telemetry,
+        MulticastSettings multicast) {
 
     public TokenConfig {
         Objects.requireNonNull(listen, "listen");
@@ -75,8 +78,9 @@ public record TokenConfig(Endpoint listen, TlsContextFactory.Material tls, Path 
         ControlClient.Settings control = ControlClient.Settings.from(c);
         StateSync.Settings sync = StateSync.Settings.from(c);
         TelemetrySender.Settings telemetry = TelemetrySender.Settings.from(c); // null: no collector
+        MulticastSettings multicast = MulticastSettings.from(c); // null: no notices, polling only
         c.requireNoUnknownKeys();
         return new TokenConfig(listen, tls, signer, alias, keyId, signerPass, limits, perIdentity, control, sync,
-                telemetry);
+                telemetry, multicast);
     }
 }

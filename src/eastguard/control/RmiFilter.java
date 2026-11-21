@@ -41,11 +41,13 @@ public final class RmiFilter implements ObjectInputFilter {
             Dto.Credential.class, Dto.SyncRequest.class, Dto.DashboardRequest.class, Dto.PolicyRequest.class,
             Dto.QuarantineRequest.class, Dto.ReleaseRequest.class, Dto.ReplacePolicyRequest.class,
             Dto.SetModeRequest.class, Dto.SetLeaseDefaultsRequest.class, Dto.ObservationBatch.class,
-            Dto.ActionProposal.class, Dto.FreezeRequest.class, Dto.Observation.class, Dto.ActionType.class);
+            Dto.ActionProposal.class, Dto.FreezeRequest.class, Dto.Observation.class, Dto.ActionType.class,
+            Dto.LearningDraftRequest.class);
 
     private static final Set<Class<?>> RESPONSES = Set.of(
             Dto.ErrorCode.class, Dto.SyncResponse.class, Dto.MutationResult.class, Dto.DashboardView.class,
-            Dto.AuditEntry.class, Dto.RestrictionView.class, Dto.PolicyView.class, Dto.AlertView.class);
+            Dto.AuditEntry.class, Dto.RestrictionView.class, Dto.PolicyView.class, Dto.AlertView.class,
+            Dto.LearningDraftView.class, Role.class);
 
     private static final Set<Class<?>> STUB = Set.of(
             Proxy.class, java.rmi.server.RemoteObjectInvocationHandler.class, java.rmi.server.RemoteObject.class,

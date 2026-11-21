@@ -30,6 +30,8 @@ import java.util.Set;
  * bootstrap.pilot.services=
  * bootstrap.tokenKeys=lease-k1
  * bootstrap.tokenKey.lease-k1.cert=keys/lease-k1.cer
+ * bootstrap.controlKeys=control-k1              multicast notice keys (spec §5.4); optional, separate from
+ * bootstrap.controlKey.control-k1.cert=keys/control-k1.cer   the lease keys
  * </pre>
  *
  * Edges and pilot entries must reference listed workloads and services. Deny by default: an empty edge list
@@ -91,9 +93,14 @@ public final class BootstrapState {
             keys.put(keyId, KeyStores.ed25519PublicKey(c.path("bootstrap.tokenKey." + keyId + ".cert")));
         }
 
+        Map<String, PublicKey> controlKeys = new HashMap<>();
+        for (String keyId : c.idList("bootstrap.controlKeys")) {
+            controlKeys.put(keyId, KeyStores.ed25519PublicKey(c.path("bootstrap.controlKey." + keyId + ".cert")));
+        }
+
         Policy policy = new Policy(mode, edges, pilot, revision, lease);
         return new EnforcementSnapshot(cluster, revision, policy, workloads, services, List.of(), List.of(),
-                Map.of(), keys, Set.of());
+                Map.of(), keys, Set.of(), controlKeys);
     }
 
     private static void requireKnown(Config c, Set<String> known, String id, String key) {
