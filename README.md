@@ -54,8 +54,8 @@ tests in `test/eastguard/test`.
 
 ## Run guide (fresh Windows machine)
 
-Everything below runs in **Windows PowerShell 5.1** (or PowerShell 7) from the project root. Steps 1–6 are
-needed once.
+Everything below runs in **Windows PowerShell 5.1** (or PowerShell 7) from the project root. Steps 1–5 are
+needed once; step 3 again after pulling changes.
 
 ### 1. Check the JDK
 
@@ -115,7 +115,9 @@ java -ea -cp out eastguard.test.AllTests          # expect "357 passed, 0 failed
 java -ea -cp out eastguard.test.AllTests Gateway  # only classes whose name contains "Gateway"
 ```
 
-The tests do not use `keys\`. The first run builds a throwaway test PKI in `out\test-pki` with
+Run step 4 first: two `TokenConfigTest` tests parse the shipped bootstrap example, which reads the public
+certificates `keys\lease-k1.cer` and `keys\control-k1.cer`. Every other test uses its own throwaway test PKI:
+the first run builds it in `out\test-pki` with
 `gen-certs.ps1 -TestFixtures` (about 20 s); later runs reuse it. A full run takes about 1.5–2 minutes. Add
 `-Deastguard.testLog=true` to see server logs.
 
@@ -133,7 +135,8 @@ java -cp out eastguard.demos.DemoM4_Multicast    # multicast: 3 receivers apply 
 java -cp out eastguard.demos.DemoM5_Rmi          # RMI: audited edit, conflict, idempotent retry, release, typed ztp:// read, audit export
 ```
 
-`DemoM3_Udp` needs nothing from `keys\`; the others need steps 4 (and `DemoM5_Rmi` the credentials).
+`DemoM3_Udp` needs nothing from `keys\`; the others need step 4. Measured numbers for these runs are in
+[`docs/RESULTS.md`](docs/RESULTS.md).
 
 ### 8. End-to-end: separate processes and the final demo
 
