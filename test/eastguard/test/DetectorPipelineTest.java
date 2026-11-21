@@ -102,6 +102,69 @@ public final class DetectorPipelineTest {
         }
     }
 
+    /**
+     * Spec §10 "untrusted or duplicate UDP does not inflate scores", end to end over real UDP: between two genuine
+     * events, forged (wrong key), wrong-cluster, out-of-scope, replayed and oversized datagrams for the same actor
+     * reach the detector, and the score is exactly what the two genuine events give (30 + 10).
+     */
+    public void testForgedDuplicateAndOutOfScopeUdpDoNotInflateScores() throws Exception {
+        Path file = ControlFixtures.freshJournal();
+        try (Journal j = Journal.open(file)) {
+            ControlPlaneImpl cp = ControlPlaneImpl.open(j, Clock.systemUTC(), fx.credentials,
+                    ControlPlaneImpl.Settings.defaults());
+            assertTrue(cp.bootstrap(DetectorControlTest.learning(), "admin", "test").ok(), "bootstrap");
+            ThreatDetector d = new ThreatDetector(settings(false), TelemetryVerifierTest.inventory(),
+                    DetectorControl.direct(cp, fx.cred("detector")), Clock.systemUTC(), System::nanoTime);
+            d.start();
+            try (java.net.DatagramSocket out = new java.net.DatagramSocket()) {
+                InetSocketAddress to = new InetSocketAddress(InetAddress.getLoopbackAddress(), d.port());
+                long now = System.currentTimeMillis();
+                eastguard.common.Bytes boot = TelemetryVerifierTest.BOOT;
+                IpAddress ip = TelemetryVerifierTest.IP;
+                Endpoint gwL = TelemetryVerifierTest.GW;
+                java.util.function.BiFunction<Long, ReasonCode, eastguard.common.Telemetry> deny = (seq, r) ->
+                        TelemetryVerifierTest.event("gw-app-02", boot, seq, now, "web-01", ip, "app-02", gwL, Verdict.DENY,
+                                r, false);
+                byte[] first = TelemetryVerifierTest.gw(deny.apply(0L, ReasonCode.POLICY_DENY)); // +30
+                List<byte[]> junk = new java.util.ArrayList<>();
+                for (long seq = 1; seq <= 5; seq++) {
+                    junk.add(first); // replayed / duplicated: same producer, boot and sequence number
+                    junk.add(eastguard.common.TelemetryCodec.encode(deny.apply(seq, ReasonCode.POLICY_DENY),
+                            TelemetryVerifierTest.ISS_KEY)); // forged: another producer's key
+                    junk.add(TelemetryVerifierTest.gw(new eastguard.common.Telemetry("other-cluster", "gw-app-02", "tk1",
+                            boot, 100 + seq, now, 3, "web-01", ip, "app-02", gwL.ip(), gwL.port(), Verdict.DENY,
+                            ReasonCode.POLICY_DENY, false))); // wrong cluster
+                    junk.add(TelemetryVerifierTest.gw(TelemetryVerifierTest.event("gw-app-02", boot, 200 + seq, now,
+                            "web-01", ip, "app-05", TelemetryVerifierTest.GW5, Verdict.DENY, ReasonCode.POLICY_DENY,
+                            false))); // out of scope: gw-app-02 does not own app-05's listener
+                    byte[] big = new byte[1_300];
+                    System.arraycopy(first, 0, big, 0, first.length);
+                    junk.add(big); // oversized: rejected before parsing
+                }
+                byte[] last = TelemetryVerifierTest.gw(deny.apply(1L, ReasonCode.INVALID_TOKEN)); // +10, the marker
+                out.send(new java.net.DatagramPacket(first, first.length, to));
+                for (byte[] b : junk) {
+                    out.send(new java.net.DatagramPacket(b, b.length, to));
+                }
+                out.send(new java.net.DatagramPacket(last, last.length, to));
+                long deadline = System.nanoTime() + 5_000_000_000L;
+                while (d.telemetryStats().count(TelemetryVerifier.Result.ACCEPTED) < 2 && System.nanoTime() < deadline) {
+                    Thread.sleep(10);
+                }
+                Thread.sleep(200); // anything still in flight would land now
+                assertEquals(40, d.score(Selector.identity("web-01")));
+                assertEquals(0, d.score(Selector.ip(ip)));
+                TelemetryVerifier.Stats s = d.telemetryStats();
+                assertEquals(2, s.count(TelemetryVerifier.Result.ACCEPTED));
+                assertEquals(5, s.count(TelemetryVerifier.Result.DUPLICATE));
+                assertEquals(2, d.eventsProcessed());
+                assertTrue(d.alerts().isEmpty(), "no alert from junk");
+            } finally {
+                d.close();
+            }
+        }
+    }
+
     /** The reply to a committed proposal is lost; the retry with the same ID is answered as a replay. */
     public void testDispatcherRetriesWithTheSameIdempotencyId() throws Exception {
         Path file = ControlFixtures.freshJournal();

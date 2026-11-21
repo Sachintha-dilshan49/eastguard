@@ -37,7 +37,7 @@
 #>
 param(
     [string]$OutDir,
-    [string[]]$Principals = @('admin:ADMIN', 'operator:OPERATOR', 'viewer:VIEWER', 'gw-app-02:GATEWAY',
+    [string[]]$Principals = @('admin:ADMIN', 'operator:OPERATOR', 'viewer:VIEWER', 'gw-app-02:GATEWAY', 'gw-app-03:GATEWAY',
         'tokensvc:ISSUER', 'detector:DETECTOR', 'console-viewer:VIEWER', 'console-operator:OPERATOR',
         'console-admin:ADMIN'),
     [string[]]$Add,
@@ -46,7 +46,7 @@ param(
     [string]$Retire,
     [string]$Revoke,
     [switch]$TelemetryKeys,
-    [string[]]$TelemetryProducers = @('gw-app-02', 'tokensvc')
+    [string[]]$TelemetryProducers = @('gw-app-02', 'gw-app-03', 'tokensvc')
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3

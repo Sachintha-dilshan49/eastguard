@@ -1,0 +1,67 @@
+# EastGuard control plane for the end-to-end demo (scripts\run-demo.ps1). Same as control.properties.example
+# except: its own journal (journal\demo-control.journal) and AUTOMATIC QUARANTINE ENABLED, so the labelled decoy
+# fixture in DemoFinal leads to a committed quarantine. The detector's demo configuration enables it too; both
+# must agree (spec §6.1). Lease-reduction automation stays off. Do not use this file for a first rollout (§9.3).
+#
+#   .\scripts\reset-demo.ps1     # delete the demo journal and logs, bootstrap config\demo-bootstrap.properties.example
+#   .\scripts\run-demo.ps1       # start every component as a separate JVM
+
+cluster.id=eg-demo
+
+# --- RMI: fixed ports, one numeric address (also advertised in stubs), TLS 1.3 + client auth on both ---
+rmi.host=127.0.0.1
+rmi.registryPort=1099
+rmi.objectPort=1100
+
+tls.keyStore=keys/control.p12
+tls.trustStore=keys/truststore.p12
+tls.passwordEnv=EASTGUARD_STORE_PASS
+tls.passwordFile=keys/store.pass
+
+# --- Durable state (journal/ is git-ignored). Exclusive lock; forced to disk before every acknowledgement. ---
+journal.file=journal/demo-control.journal
+
+# --- Per-principal API credentials (digests + roles); reloaded when the file changes ---
+credentials.file=keys/control-credentials.properties
+
+# --- HTTPS audit export (spec §7.3): read-only /audit (paginated), /metrics, /health/live, /health/ready. ---
+# --- TLS 1.3 with a required client certificate whose URI SAN is listed below (the operator console).      ---
+audit.listen=127.0.0.1:9443
+audit.allowedClients=urn:eastguard:console:dashboard
+
+# --- Limits ---
+quarantine.maxTtlSeconds=86400
+audit.retainedEntries=10000
+
+# --- Detector automation (spec §6.1): alert-only until enabled here AND in the detector configuration ---
+automation.leaseReduction=false
+automation.quarantine=true
+# Newly issued leases under a risk lease reduction (spec §9.1 lease.stepUpSeconds).
+lease.stepUpSeconds=10
+# Longest expiry of an automatic action (default automatic quarantine TTL is 5 min) and actions per rolling hour.
+automation.maxActionTtlSeconds=300
+automation.maxActionsPerHour=20
+# Never acted on automatically.
+automation.protectedIdentities=
+# An IP selector must be inside an eligible range and outside every excluded (shared/NAT or infrastructure) range.
+automation.eligibleCidrs=10.0.0.0/8,127.0.0.0/8
+automation.excludedCidrs=10.0.99.0/24,10.0.0.0/28
+
+# --- Learning draft (in memory; candidates beyond this are dropped and counted) ---
+learning.maxCandidates=10000
+
+# --- Quarantine notices (spec §5.4, §6.2 step 1): after each committed quarantine or release, the same signed ---
+# --- EGC1 notice is multicast 3 times. A send failure never undoes the commit; receivers converge by sync.    ---
+multicast.group=239.20.20.20
+multicast.port=4446
+# Explicit sending interface: an address of the interface or its name. 127.0.0.1 keeps the demo on loopback.
+multicast.interface=127.0.0.1
+multicast.ttl=1
+# Ed25519 control-plane signer (NOT the lease key): .\scripts\gen-certs.ps1 -AddControlSigner. Its public key
+# must be published by the journal (bootstrap.controlKeys in the bootstrap state).
+notice.keyStore=keys/control-signer.p12
+notice.keyAlias=control-k1
+notice.keyId=control-k1
+notice.passwordEnv=EASTGUARD_CONTROL_SIGNER_PASS
+notice.passwordFile=keys/control-signer.pass
+notice.repeatGapMillis=10

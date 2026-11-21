@@ -12,6 +12,8 @@
     truststore.p12          trusts only the demo CA
     tokensvc.p12            token service   SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:tokensvc
     gateway-app-02.p12      gateway app-02  SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:gateway-app-02
+    gateway-app-03.p12      gateway app-03  SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:gateway-app-03
+                            (the second gateway of the end-to-end demo)
     control.p12             control plane   SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:control
     detector.p12            threat detector SAN dns:localhost, ip:127.0.0.1, uri:urn:eastguard:component:detector
     workload-web-01.p12     workload        SAN uri:urn:eastguard:workload:web-01
@@ -304,6 +306,7 @@ try {
 
     New-Server 'tokensvc' 'tokensvc'
     New-Server 'gateway-app-02' 'gateway-app-02'
+    New-Server 'gateway-app-03' 'gateway-app-03'
     New-Server 'control' 'control'
     New-Server 'detector' 'detector'
     New-Workload 'workload-web-01' 'uri:urn:eastguard:workload:web-01' $caStore $caCer 'web-01'

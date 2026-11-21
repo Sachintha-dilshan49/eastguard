@@ -57,7 +57,7 @@ public final class JournalTest {
         QUIET.setLevel(Level.SEVERE); // the recovery WARNING is expected here
         write("one", "two", "three");
         long full = Files.size(file);
-        for (int cut : new int[] {1, 5, 12, 14}) { // inside the header, and inside the payload, of "three"
+        for (int cut = 1; cut < 5 + 12; cut++) { // a crash after every byte of the header and payload of "three"
             write(); // reopen once so the file is consistent
             try (FileChannel ch = FileChannel.open(file, StandardOpenOption.WRITE)) {
                 ch.truncate(full - (5 + 12) + Math.min(cut, 5 + 12 - 1)); // keep "one","two" + a prefix of "three"

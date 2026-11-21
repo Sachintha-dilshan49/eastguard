@@ -13,6 +13,7 @@ config/*.properties
 
 # Runtime state
 journal/
+logs/
 *.journal
 *.log
 

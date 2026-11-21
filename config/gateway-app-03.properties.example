@@ -1,0 +1,65 @@
+# EastGuard NIO gateway for service app-03 (spec §4.3, §9.1): the second gateway of the end-to-end demo
+# (config\demo-bootstrap.properties.example). Same settings as gateway-app-02.properties.example with its own
+# listener, backend, certificate, API principal and telemetry key, and no decoy listener. No secrets here.
+#
+#   .\scripts\gen-certs.ps1 -AddComponent gateway-app-03          # on a key set made before Task 10
+#   .\scripts\gen-credentials.ps1 -Add gw-app-03:GATEWAY
+#   .\scripts\gen-credentials.ps1 -TelemetryKeys -TelemetryProducers gw-app-03
+#   java -cp out eastguard.demos.EchoBackend 127.0.0.1:7003
+#   java -cp out eastguard.gateway.NioGateway --config config/gateway-app-03.properties.example
+
+cluster.id=eg-demo
+gateway.service=app-03
+listen=127.0.0.1:9004
+backend=127.0.0.1:7003
+
+# --- TLS (mTLS, TLS 1.3 only). The same certificate is the RMI client identity towards the control plane. ---
+tls.keyStore=keys/gateway-app-03.p12
+tls.trustStore=keys/truststore.p12
+tls.passwordEnv=EASTGUARD_STORE_PASS
+tls.passwordFile=keys/store.pass
+
+# --- Deadlines (milliseconds) ---
+limits.handshakeMillis=5000
+limits.preambleMillis=2000
+limits.backendConnectMillis=2000
+limits.idleMillis=60000
+limits.maxSessionMillis=300000
+
+# --- Resource limits ---
+limits.maxConnections=2048
+limits.maxConnectionsPerPeer=1024
+limits.maxHandshakes=256
+limits.bufferBudgetBytes=268435456
+limits.relayBufferBytes=32768
+limits.highWaterBytes=24576
+limits.lowWaterBytes=8192
+limits.tlsTaskThreads=2
+limits.commandQueue=1024
+limits.backlog=512
+limits.maxAcceptsPerEvent=64
+
+# --- Authoritative state from the control plane (RMI over mTLS, role GATEWAY), polled off the selector ---
+control.registry=127.0.0.1:1099
+control.objectPort=1100
+control.principal=gw-app-03
+control.secretEnv=EASTGUARD_API_SECRET_GW_APP_03
+control.secretFile=keys/api/gw-app-03.secret
+# No admissions before the first sync; after 5 s without a successful sync, deny and close relay sessions.
+state.pollMillis=1000
+state.maxAgeMillis=5000
+
+# --- Flow telemetry (spec §5.3): HMAC-authenticated, best-effort UDP to the threat detector. Never blocks the ---
+# --- selector: a full queue drops (and counts) events. Key: scripts/gen-credentials.ps1 -TelemetryKeys      ---
+telemetry.collector=127.0.0.1:5514
+telemetry.producerId=gw-app-03
+telemetry.keyId=tk1
+telemetry.keyEnv=EASTGUARD_TELEMETRY_KEY_GW_APP_03
+telemetry.keyFile=keys/telemetry/gw-app-03.key
+telemetry.queue=4096
+
+# --- Quarantine notices (spec §5.4, §6.2): joined before the first sync, verified against the control keys in ---
+# --- the synced snapshot. A newer QUARANTINE blocks at once; any newer notice triggers an immediate sync.    ---
+multicast.group=239.20.20.20
+multicast.port=4446
+multicast.interface=127.0.0.1

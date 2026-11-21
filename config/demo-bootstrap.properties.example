@@ -1,0 +1,29 @@
+# EastGuard end-to-end demo state (spec §11 "Final demo"), used by scripts\run-demo.ps1 and reset-demo.ps1.
+# Written into the demo journal ONCE by the explicit bootstrap command; after that the journal is authoritative.
+#
+# Two protected services, each behind its own gateway, so one committed restriction can be shown closing sessions
+# at multiple gateways. Deny by default: web-01 may reach both; api-01 may reach neither until a reviewed learning
+# freeze approves it.
+
+cluster.id=eg-demo
+lease.defaultSeconds=60
+
+bootstrap.revision=1
+bootstrap.mode=ENFORCE
+bootstrap.workloads=web-01,api-01
+bootstrap.services=app-02,app-03
+bootstrap.service.app-02.gateway=app-02
+bootstrap.service.app-02.listener=127.0.0.1:9002
+bootstrap.service.app-02.serverName=127.0.0.1
+bootstrap.service.app-02.backend=127.0.0.1:7002
+bootstrap.service.app-03.gateway=app-03
+bootstrap.service.app-03.listener=127.0.0.1:9004
+bootstrap.service.app-03.serverName=127.0.0.1
+bootstrap.service.app-03.backend=127.0.0.1:7003
+bootstrap.edges=web-01>app-02,web-01>app-03
+bootstrap.pilot.sources=
+bootstrap.pilot.services=
+bootstrap.tokenKeys=lease-k1
+bootstrap.tokenKey.lease-k1.cert=keys/lease-k1.cer
+bootstrap.controlKeys=control-k1
+bootstrap.controlKey.control-k1.cert=keys/control-k1.cer

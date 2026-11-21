@@ -1,40 +1,217 @@
 # EastGuard
 
-Zero-trust east-west TCP access control: Ed25519-signed short-lived leases over mTLS, an NIO gateway
-that relays only after authorization, UDP telemetry to a threat detector, RMI control plane, and signed
-multicast quarantine notices. Full specification: [`docs/EASTGUARD.md`](docs/EASTGUARD.md).
+Zero-trust east-west TCP access control. A workload gets a short-lived, Ed25519-signed lease from a token service
+over mutual TLS, presents it to an NIO gateway over mutual TLS, and the gateway relays bytes to one fixed private
+backend only after authorization. Gateways report HMAC-authenticated UDP telemetry to a threat detector. The
+detector proposes containment to an RMI control plane, which journals every change and multicasts signed
+quarantine notices. A Swing console, an HTTPS audit export and a `ztp://` URL handler sit on top.
 
-Java 21, JDK only. No Maven, Gradle, or external libraries.
+Java 21, JDK only: no Maven, Gradle or external libraries. Full specification: [`docs/EASTGUARD.md`](docs/EASTGUARD.md).
 
-## Build and test (PowerShell)
+| Document | What it holds |
+|----------|---------------|
+| [`docs/EASTGUARD.md`](docs/EASTGUARD.md) | the specification |
+| [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md) | every deliberate simplification, why, and what would remove it |
+| [`docs/TEST-COVERAGE.md`](docs/TEST-COVERAGE.md) | each spec §10 failure scenario → the tests that cover it → result; what cannot be tested locally |
+| [`docs/RESULTS.md`](docs/RESULTS.md) | measured numbers (admission, sessions and threads, containment, control-plane loss), the machine, the limits |
 
-Run from the project root (`D:\projects\eastguard`). Needs a JDK 21 or newer `javac`/`java` on PATH;
-`--release 21` pins the language level and API.
+## Architecture
 
-```powershell
-# 1. Regenerate the javac argument file after adding/removing .java files
-.\scripts\sources.ps1
-
-# 2. Compile everything (src + test) into out\
-javac --release 21 -d out "@sources.txt"
-
-# 3. Run all tests (exit code 0 = all passed, 1 = any failure or no tests ran)
-java -ea -cp out eastguard.test.AllTests
-
-# Run only test classes whose simple name contains a filter
-java -ea -cp out eastguard.test.AllTests Wire
+```
+                 mTLS (TLS 1.3, client cert)             RMI over mTLS + per-call API credential
+  workload  ------------------------------>  token service  <------------------------------+
+  web-01      lease request / signed lease   (issues leases)        sync (poll 1 s)        |
+     |                                                                                     |
+     | mTLS + preamble(lease)                                                              |
+     v                                                                                     |
+  NIO gateway app-02  -- plain TCP, only after ALLOW -->  private backend 127.0.0.1:7002   |
+  NIO gateway app-03  -- plain TCP, only after ALLOW -->  private backend 127.0.0.1:7003   |
+     |       ^                                                                             |
+     |       +---- signed EGC1 multicast notices 239.20.20.20:4446 ----+                   |
+     | UDP telemetry (HMAC-SHA256)                                     |                   |
+     v                                                                 |                   |
+  threat detector  -- proposeAction / recordObservations (RMI) -->  control plane  --------+
+  (10 s window, scores, decoys, learning)                       (journal, single writer,
+                                                                 audit, HTTPS export)
+                                                                       ^
+                                             Swing console (RMI) ------+------ ztp://policy/<service>
 ```
 
-Notes:
+- **Identity** is the single `urn:eastguard:workload:<id>` URI SAN of a client certificate from the demo CA.
+- **Leases** (60 s, `EGT1`) are bound to the certificate's SHA-256, the source IP, the audience service and the
+  enforcement revision they were issued at.
+- **The gateway** is one selector thread with an explicit per-connection state machine. It connects the backend
+  only after the lease verifies and policy allows it, and sends `ALLOW` only after the backend connect succeeded.
+- **The control plane** is authoritative. Every mutation is journaled and forced to disk before it is
+  acknowledged. Enforcement points fail closed when their state is older than 5 s.
+- **Containment**: a committed quarantine is multicast at once and closes matching sessions at every gateway. A
+  release writes a watermark, so leases issued before it are refused and a fresh lease is needed.
+- **Learning**: in LEARN mode, pilot-scope admissions outside the approved graph become candidates. An admin
+  reviews the exact diff and freezes it into the ENFORCE allow-list in one journaled change.
 
-- Quote `"@sources.txt"`. Unquoted, PowerShell treats `@sources` as array splatting and javac gets no files.
-- If the execution policy blocks the script, run
-  `powershell -ExecutionPolicy Bypass -File scripts\sources.ps1`.
-- Clean build: `Remove-Item -Recurse -Force out` then repeat steps 2–3.
+Code layout (spec §8): `src/eastguard/{common,client,gateway,tokensvc,detector,bus,control,dashboard,handlers,demos}`,
+tests in `test/eastguard/test`.
 
-The first test run also generates a throwaway test PKI by running `scripts\gen-certs.ps1 -TestFixtures`
-into `out\test-pki` (about 20 s). Later runs reuse it until `out\` is deleted or the certificates are near
-expiry. Pass `-Deastguard.testLog=true` to `java` to see server logs during tests.
+## Run guide (fresh Windows machine)
+
+Everything below runs in **Windows PowerShell 5.1** (or PowerShell 7) from the project root. Steps 1–6 are
+needed once.
+
+### 1. Check the JDK
+
+```powershell
+java -version        # must say version "21" or newer
+javac -version       # a JDK, not only a JRE
+```
+
+Install a JDK 21+ (for example Eclipse Temurin 21 or Oracle JDK 21) if either is missing, then open a **new**
+terminal. The scripts find `keytool` through `JAVA_HOME`, then `PATH`, then the active `java`. If PowerShell
+refuses to run scripts, allow them for this terminal only:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+### 2. Get the code
+
+```powershell
+git clone https://github.com/Sachintha-dilshan49/eastguard.git
+cd eastguard
+```
+
+### 3. Build
+
+```powershell
+.\scripts\sources.ps1                      # writes sources.txt: every .java under src and test
+javac --release 21 -d out "@sources.txt"   # quote "@sources.txt": unquoted, PowerShell splats it
+```
+
+### 4. Demo keys and certificates
+
+```powershell
+.\scripts\gen-certs.ps1          # demo CA, component/workload/console certificates, lease and notice signers -> keys\
+.\scripts\gen-credentials.ps1    # per-principal API secrets (keys\api\), their digests, telemetry HMAC keys
+```
+
+Both use JDK tools only and write to `keys\`, which is git-ignored. Passwords and secrets are generated, kept in
+files readable only by the current user, and never printed or passed on a command line. Details:
+"Demo keys and certificates" below.
+
+### 5. Bootstrap the demo journal
+
+```powershell
+.\scripts\reset-demo.ps1
+```
+
+This is the explicit administrator bootstrap (spec §9.1). It writes revision 1 of `journal\demo-control.journal`:
+services `app-02` and `app-03`, approved edges `web-01 -> app-02` and `web-01 -> app-03`, ENFORCE, deny by default.
+Run it again at any time to start over; it refuses while a demo control plane is running. (`run-demo.ps1` runs it
+by itself when the journal does not exist.)
+
+### 6. Run all tests
+
+```powershell
+java -ea -cp out eastguard.test.AllTests          # expect "357 passed, 0 failed", exit code 0
+java -ea -cp out eastguard.test.AllTests Gateway  # only classes whose name contains "Gateway"
+```
+
+The tests do not use `keys\`. The first run builds a throwaway test PKI in `out\test-pki` with
+`gen-certs.ps1 -TestFixtures` (about 20 s); later runs reuse it. A full run takes about 1.5–2 minutes. Add
+`-Deastguard.testLog=true` to see server logs.
+
+### 7. The five concept demos
+
+Each one prints numbered steps with `[ok]` / `[FAIL]` lines and exits 0 only when every check passes. Run them
+one at a time, and **not while `run-demo.ps1` is running**: they use the same fixed ports (7002, 1099/1100,
+9443, 4446).
+
+```powershell
+java -cp out eastguard.demos.DemoM1_Nio          # NIO gateway: 500 concurrent sessions (arg: count, e.g. 1000), threads, backpressure, decoy
+java -cp out eastguard.demos.DemoM2_Tls          # TLS: lease over mTLS, untrusted certificate fails, tampered leases denied
+java -cp out eastguard.demos.DemoM3_Udp          # UDP: labelled fixture stream -> exact scores, CIDR classes, forged/duplicate ignored
+java -cp out eastguard.demos.DemoM4_Multicast    # multicast: 3 receivers apply a commit, duplicates/drops/late notices converge
+java -cp out eastguard.demos.DemoM5_Rmi          # RMI: audited edit, conflict, idempotent retry, release, typed ztp:// read, audit export
+```
+
+`DemoM3_Udp` needs nothing from `keys\`; the others need steps 4 (and `DemoM5_Rmi` the credentials).
+
+### 8. End-to-end: separate processes and the final demo
+
+Terminal 1 starts every component as its own JVM in the spec §9.2 order and waits until each one is ready:
+
+```powershell
+.\scripts\run-demo.ps1            # add -Reset to start from a fresh journal
+```
+
+```
+  control         pid 21452  ready in  1.7 s   RMI 127.0.0.1:1099/1100, audit https://127.0.0.1:9443
+  detector        pid 11864  ready in  0.9 s   UDP 127.0.0.1:5514
+  tokensvc        pid 26300  ready in  1.5 s   mTLS 127.0.0.1:8443
+  backend-7002    pid 18912  ready in  0.2 s   private backend of app-02
+  gateway-app-02  pid 3600   ready in  1.1 s   mTLS 127.0.0.1:9002, decoy 127.0.0.1:9003
+  backend-7003    pid 25328  ready in  0.4 s   private backend of app-03
+  gateway-app-03  pid 12228  ready in  1.3 s   mTLS 127.0.0.1:9004
+  waiting 4.8 s for the detector's restart guard (10000 ms after its start) to end
+
+demo is ready.
+```
+
+Terminal 2 (project root) runs the scripted final demo (spec §11) against those processes:
+
+```powershell
+java -cp out eastguard.demos.DemoFinal
+```
+
+1. **Approved flow**: `web-01` gets a lease and reaches `app-02`, and `app-03` through the second gateway.
+2. **Unapproved flow**: `api-01 -> app-02` is refused by the token service (`POLICY_DENY`) and by the gateway
+   (replayed lease, `IDENTITY_MISMATCH`).
+3. **Learning**: admin switches to LEARN with pilot `api-01 -> app-02`. The pilot connection is admitted, the
+   detector reports it, the draft shows the candidate, and the reviewed diff `[+api-01->app-02]` is frozen. The
+   edge then works in ENFORCE, while the unscoped `api-01 -> app-03` stays denied.
+4. **Detector fixture**: one labelled TCP touch of the owned decoy listener → CRITICAL alert → detector proposal →
+   committed quarantine → live sessions closed at **both** gateways (about 80 ms here).
+5. **Release**: the old lease is rejected by the release watermark (`LEASE_SUPERSEDED`), and a fresh lease
+   reconnects at both gateways.
+
+The server-side reason for each step is read from `logs\`. `DemoFinal --measure 20` also times containment and
+connects across the processes. Or let terminal 1 do it all and stop afterwards:
+
+```powershell
+.\scripts\run-demo.ps1 -Reset -RunFinal                              # exit code = DemoFinal's
+.\scripts\run-demo.ps1 -Reset -RunFinal -FinalArgs '--measure','20'
+```
+
+`DemoFinal` needs a fresh state: to run it again, press **Ctrl+C** in terminal 1 and start
+`.\scripts\run-demo.ps1 -Reset`. Ctrl+C (or any component failing to start or exiting) stops every component
+through its shutdown hooks, in reverse order. Logs stay in `logs\` (git-ignored) until the next reset.
+
+### 9. Open the dashboard
+
+With `run-demo.ps1` running, in another terminal:
+
+```powershell
+java -cp out eastguard.dashboard.DashboardApp --config config/dashboard.properties.example
+```
+
+The console connects as `console-operator` (quarantine and release). To review and freeze a learning draft,
+copy the example to `config\dashboard.properties` (git-ignored), set `control.principal=console-admin` and
+`control.secretFile=keys/api/console-admin.secret`, and start it with that file. `--demo` instead of `--config ...`
+shows labelled fixture scenarios with no network.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `ports already in use: ...` from `run-demo.ps1` | another demo, a `DemoM*` or a leftover component still runs. Find it with `Get-NetTCPConnection -LocalPort 9002` / `Get-NetUDPEndpoint -LocalPort 5514` |
+| `missing: keys\gateway-app-03.p12, ...` | a key set from before the second gateway: run the three commands `run-demo.ps1` prints |
+| `the demo state is not fresh` from `DemoFinal` | Ctrl+C in terminal 1, then `.\scripts\run-demo.ps1 -Reset` |
+| `javac: no source files` | `"@sources.txt"` was not quoted, or `.\scripts\sources.ps1` was not run |
+| a script "cannot be loaded because running scripts is disabled" | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` |
+| step 4 says the detector suppressed the proposal | the detector's restart guard (10 s) or 60 s cooldown; `run-demo.ps1` waits out the guard, a reset clears the cooldown |
+
+---
+
+# Component reference
 
 ## Demo keys and certificates
 
@@ -43,7 +220,7 @@ expiry. Pass `-Deastguard.testLog=true` to `java` to see server logs during test
 ```
 
 This uses JDK `keytool` only. It finds keytool via `JAVA_HOME`, then PATH, then the active `java`. It creates a
-demo CA, a separate untrusted CA, PKCS#12 stores for the token service, gateway `app-02`, the control plane, the
+demo CA, a separate untrusted CA, PKCS#12 stores for the token service, gateways `app-02` and `app-03`, the control plane, the
 threat detector, and workloads `web-01` / `api-01` (URI SAN `urn:eastguard:workload:<id>`), a `web-01`
 look-alike signed by the
 untrusted CA, the Ed25519 lease-signing key `lease-k1`, and a separate Ed25519 control-plane notice signer

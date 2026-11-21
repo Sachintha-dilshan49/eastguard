@@ -1,0 +1,69 @@
+# EastGuard threat detector for the end-to-end demo (scripts\run-demo.ps1). Same as detector.properties.example
+# except:
+#   - AUTOMATIC QUARANTINE ENABLED (the demo control-plane config enables it too; the control plane rechecks);
+#   - a second gateway producer, gw-app-03, with its own HMAC key (keys\telemetry\gw-app-03.key);
+#   - a 10 s acceptance window, so the restart guard ends 10 s after start instead of 30 s;
+#   - learning batches flushed every second, so a pilot observation reaches the draft quickly.
+# Do not use this file for a first rollout (spec §9.3: alert-only first).
+
+cluster.id=eg-demo
+
+# --- Flow telemetry (UDP, management network). Datagrams over 1,200 bytes are rejected unparsed. ---
+listen=127.0.0.1:5514
+# Events older than this are rejected; dedup state is kept this long; no automatic action this long after start.
+telemetry.acceptanceMillis=10000
+telemetry.maxSkewMillis=5000
+telemetry.seqWindow=1024
+telemetry.maxBootsPerProducer=8
+
+# --- Trusted producer inventory: each producer's own key and the listeners it may report on ---
+producers=gw-app-02,gw-app-03,tokensvc
+producer.gw-app-02.kind=GATEWAY
+producer.gw-app-02.keyId=tk1
+producer.gw-app-02.keyEnv=EASTGUARD_TELEMETRY_KEY_GW_APP_02
+producer.gw-app-02.keyFile=keys/telemetry/gw-app-02.key
+producer.gw-app-02.listeners=app-02@127.0.0.1:9002
+producer.gw-app-02.decoys=decoy-9003@127.0.0.1:9003
+producer.gw-app-03.kind=GATEWAY
+producer.gw-app-03.keyId=tk1
+producer.gw-app-03.keyEnv=EASTGUARD_TELEMETRY_KEY_GW_APP_03
+producer.gw-app-03.keyFile=keys/telemetry/gw-app-03.key
+producer.gw-app-03.listeners=app-03@127.0.0.1:9004
+producer.tokensvc.kind=ISSUER
+producer.tokensvc.keyId=tk1
+producer.tokensvc.keyEnv=EASTGUARD_TELEMETRY_KEY_TOKENSVC
+producer.tokensvc.keyFile=keys/telemetry/tokensvc.key
+producer.tokensvc.listeners=*@127.0.0.1:8443
+
+# --- Scoring (10 s window; 50 alert, 100 critical; fixed score table of spec §6.1) ---
+detector.maxActors=10000
+detector.maxEventsPerActor=256
+detector.cooldownMillis=60000
+detector.maxAlerts=200
+detector.protectedIdentities=
+
+# --- Automation: alert-only on first rollout. The control plane applies its own automation.* rules as well. ---
+automation.leaseReduction=false
+automation.quarantine=true
+automation.actionTtlSeconds=300
+
+# --- Source-IP classification: only MANAGED addresses (not shared, not protected) get automatic IP actions ---
+cidr.managed=10.0.0.0/8,127.0.0.0/8
+cidr.shared=10.0.99.0/24
+cidr.protected=10.0.0.0/28
+
+# --- Learning observations: successful pilot admissions outside the approved graph, sent in bounded batches ---
+learning.batchSize=100
+learning.flushMillis=1000
+learning.maxPending=1000
+
+# --- RMI client (TLS 1.3 + client auth; role DETECTOR) ---
+tls.keyStore=keys/detector.p12
+tls.trustStore=keys/truststore.p12
+tls.passwordEnv=EASTGUARD_STORE_PASS
+tls.passwordFile=keys/store.pass
+control.registry=127.0.0.1:1099
+control.objectPort=1100
+control.principal=detector
+control.secretEnv=EASTGUARD_API_SECRET_DETECTOR
+control.secretFile=keys/api/detector.secret

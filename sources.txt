@@ -92,12 +92,15 @@ src/eastguard/dashboard/QuarantinePanel.java
 src/eastguard/dashboard/RowTableModel.java
 src/eastguard/dashboard/TopologyModel.java
 src/eastguard/dashboard/TopologyPanel.java
+src/eastguard/demos/DemoFinal.java
 src/eastguard/demos/DemoM1_Nio.java
 src/eastguard/demos/DemoM2_Tls.java
 src/eastguard/demos/DemoM3_Udp.java
 src/eastguard/demos/DemoM4_Multicast.java
 src/eastguard/demos/DemoM5_Rmi.java
 src/eastguard/demos/EchoBackend.java
+src/eastguard/demos/HealthProbe.java
+src/eastguard/demos/Launch.java
 src/eastguard/detector/ActionDispatcher.java
 src/eastguard/detector/CidrClassifier.java
 src/eastguard/detector/DetectorConfig.java
@@ -139,8 +142,10 @@ test/eastguard/test/CodesTest.java
 test/eastguard/test/ControlE2ETest.java
 test/eastguard/test/ControlFixtures.java
 test/eastguard/test/ControlPlaneImplTest.java
+test/eastguard/test/CredentialsTest.java
 test/eastguard/test/CryptoTest.java
 test/eastguard/test/DashboardControllerTest.java
+test/eastguard/test/DemoConfigTest.java
 test/eastguard/test/DetectorControlTest.java
 test/eastguard/test/DetectorPipelineTest.java
 test/eastguard/test/DomainTest.java
@@ -148,6 +153,7 @@ test/eastguard/test/Fixtures.java
 test/eastguard/test/GatewayConfigTest.java
 test/eastguard/test/GatewayTest.java
 test/eastguard/test/HandshakeCodecTest.java
+test/eastguard/test/IsolationTest.java
 test/eastguard/test/JournalTest.java
 test/eastguard/test/LearningFreezeTest.java
 test/eastguard/test/LeaseCodecTest.java

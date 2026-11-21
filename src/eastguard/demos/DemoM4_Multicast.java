@@ -297,13 +297,14 @@ public final class DemoM4_Multicast {
             check(s4 != null && echo(s4, "after release"), "web-01 is admitted again");
             settle(receivers);
             List<long[]> before4 = noticeCounts(receivers);
+            long[] staleBefore = receivers.stream().mapToLong(r -> r.noticeStats().stale()).toArray();
             quiet(sender);
             int late = net.releaseHeld(true); // RELEASE copies first, then the old QUARANTINE
             check(await(() -> seen(receivers, before4) == (long) late * receivers.size(), 3_000),
                     late + " late datagrams verified at every receiver");
             long staleDelta = 0;
             for (int i = 0; i < receivers.size(); i++) {
-                staleDelta += receivers.get(i).noticeStats().stale() - before4.get(i)[1];
+                staleDelta += receivers.get(i).noticeStats().stale() - staleBefore[i]; // not before4: that is dup+stale
             }
             check(staleDelta == (long) late * receivers.size(), "all ignored as old news (revision <= installed)");
             check(receivers.stream().allMatch(r -> r.get().overlay().isEmpty()), "no overlay was created");
