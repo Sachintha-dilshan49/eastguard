@@ -129,6 +129,9 @@ src/eastguard/handlers/PolicySource.java
 src/eastguard/handlers/PolicyURLConnection.java
 src/eastguard/handlers/PolicyView.java
 src/eastguard/handlers/ZtpUrlHandler.java
+src/eastguard/simulator/LegitClient.java
+src/eastguard/simulator/PortScanner.java
+src/eastguard/simulator/TokenReplayAttack.java
 src/eastguard/tokensvc/IssueLimiter.java
 src/eastguard/tokensvc/LeaseIssuer.java
 src/eastguard/tokensvc/TlsContextFactory.java
@@ -164,6 +167,7 @@ test/eastguard/test/QuarantineBusTest.java
 test/eastguard/test/RiskEngineTest.java
 test/eastguard/test/RmiTest.java
 test/eastguard/test/SessionIndexTest.java
+test/eastguard/test/SimulatorTest.java
 test/eastguard/test/SmokeTest.java
 test/eastguard/test/StateSyncTest.java
 test/eastguard/test/TelemetryCodecTest.java
