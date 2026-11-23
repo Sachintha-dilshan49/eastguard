@@ -578,6 +578,9 @@ public final class NioGateway implements AutoCloseable {
         switch (p.state) {
             case CONNECT_BACKEND -> {
                 if ((ops & SelectionKey.OP_CONNECT) != 0) {
+                    if (!p.backend.isConnectionPending()) {
+                        return;
+                    }
                     boolean connected;
                     try {
                         connected = p.backend.finishConnect();

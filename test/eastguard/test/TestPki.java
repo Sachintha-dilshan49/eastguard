@@ -61,22 +61,29 @@ final class TestPki {
         Path log = DIR.resolveSibling("test-pki.log");
         try {
             Files.createDirectories(DIR.getParent());
-            ProcessBuilder pb = new ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
-                    "Bypass", "-File", Path.of("scripts", "gen-certs.ps1").toString(),
-                    "-OutDir", DIR.toString(), "-TestFixtures", "-Force");
+            boolean isWindows = System.getProperty("os.name", "").toLowerCase().contains("win");
+            ProcessBuilder pb;
+            if (!isWindows && Files.isRegularFile(Path.of("scripts", "gen-certs.sh"))) {
+                pb = new ProcessBuilder("bash", Path.of("scripts", "gen-certs.sh").toString(),
+                        "-OutDir", DIR.toString(), "-TestFixtures", "-Force");
+            } else {
+                pb = new ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
+                        "Bypass", "-File", Path.of("scripts", "gen-certs.ps1").toString(),
+                        "-OutDir", DIR.toString(), "-TestFixtures", "-Force");
+            }
             pb.environment().keySet().removeIf(k -> k.toUpperCase().startsWith("EASTGUARD_"));
             pb.redirectErrorStream(true).redirectOutput(log.toFile());
             System.out.println("generating test PKI in " + DIR + " (log: " + log + ")");
             Process p = pb.start();
             if (!p.waitFor(180, TimeUnit.SECONDS)) {
                 p.destroyForcibly();
-                throw new IllegalStateException("gen-certs.ps1 timed out; see " + log);
+                throw new IllegalStateException("gen-certs timed out; see " + log);
             }
             if (p.exitValue() != 0) {
-                throw new IllegalStateException("gen-certs.ps1 failed (exit " + p.exitValue() + "); see " + log);
+                throw new IllegalStateException("gen-certs failed (exit " + p.exitValue() + "); see " + log);
             }
         } catch (IOException e) {
-            throw new IllegalStateException("cannot run gen-certs.ps1", e);
+            throw new IllegalStateException("cannot run gen-certs", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);

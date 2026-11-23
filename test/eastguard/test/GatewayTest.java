@@ -553,7 +553,7 @@ public final class GatewayTest {
     }
 
     public void testSlowReaderIsBackpressuredAndLosesNothing() throws Exception {
-        final int total = 2 << 20;
+        final int total = 16 << 20;
         try (EchoBackend echo = echo(); NioGateway g = gateway(limits(), echo)) {
             GatewaySession s = client("workload-web-01").connect(ep(g), "127.0.0.1", webLease());
             AtomicLong written = new AtomicLong();
