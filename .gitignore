@@ -1,5 +1,6 @@
 # Build output
 out/
+dist/
 *.class
 
 # Secrets and generated keys — never commit
