@@ -28,6 +28,7 @@ PRINCIPALS=(
 TELEMETRY_PRODUCERS=(
     "gw-app-02"
     "gw-app-03"
+    "tokensvc"
     "token-server"
 )
 
