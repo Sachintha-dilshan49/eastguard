@@ -18,6 +18,7 @@ PRINCIPALS=(
     "viewer:VIEWER"
     "gw-app-02:GATEWAY"
     "gw-app-03:GATEWAY"
+    "tokensvc:ISSUER"
     "token-server:ISSUER"
     "detector:DETECTOR"
     "console-viewer:VIEWER"
