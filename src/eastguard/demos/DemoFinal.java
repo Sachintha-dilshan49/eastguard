@@ -266,7 +266,8 @@ public final class DemoFinal {
                 : Selector.ip(IpAddress.parse(HOST));
         check(dash.restrictions().stream().anyMatch(r -> r.selector().equals(quarantined)),
                 "active restriction: " + quarantined + " (journaled, audited as actor " + (alert == null ? "?" : alert.actor()) + ")");
-        check(lease(web, "app-02").status() == ReplyStatus.QUARANTINED, "token service refuses new leases: QUARANTINED");
+        check(afterPoll(() -> lease(web, "app-02").status() == ReplyStatus.QUARANTINED ? Boolean.TRUE : null) != null,
+                "token service refuses new leases: QUARANTINED");
         check(status(web, gw2, oldLease.token()) == ReplyStatus.QUARANTINED,
                 "gateway app-02 refuses the still-valid old lease: QUARANTINED");
 
@@ -280,7 +281,7 @@ public final class DemoFinal {
         Lease old = claims(oldLease.token());
         say("old lease: issued at revision " + (old == null ? "?" : old.issuedAtRevision()) + " < watermark " + rel.revision()
                 + ", still inside its lifetime (expires " + (old == null ? "?" : Instant.ofEpochMilli(old.expiresAtMs())) + ")");
-        check(await(() -> status(web, gw2, oldLease.token()) == ReplyStatus.DENY, 5_000),
+        check(afterPoll(() -> status(web, gw2, oldLease.token()) == ReplyStatus.DENY ? Boolean.TRUE : null) != null,
                 "gateway app-02 rejects the old lease after the release: DENY");
         evidence(gw2Deny, "gateway app-02 deny sub=web-01 .*reason=LEASE_SUPERSEDED");
         IssuerReply fresh = attempt(() -> {

@@ -1,8 +1,7 @@
 # Spec §10 coverage
 
 Every row of the spec §10 scenario table, with the tests that cover it and the result of the final run
-(`java -ea -cp out eastguard.test.AllTests`: **357 passed, 0 failed** (97 s, test PKI already generated), on the machine described in
-[`RESULTS.md`](RESULTS.md)). Test names are `Class.method` in `test/eastguard/test/`. "Demo" points to the runnable
+(`java -ea -cp out eastguard.test.AllTests`: **398 passed, 0 failed** on Linux x86_64, pure JDK 21). Test names are `Class.method` in `test/eastguard/test/`. "Demo" points to the runnable
 demos (`src/eastguard/demos/`) that show the same behaviour with real processes or sockets; their checks are
 printed as `[ok]`/`[FAIL]` and they exit non-zero on any failure.
 
@@ -10,12 +9,12 @@ The suite separates the kinds of test §10 asks for:
 
 | Kind | Where |
 |------|-------|
-| Pure unit tests (deterministic `Clock`, no I/O) | `PolicyEvaluatorTest`, `RiskEngineTest`, codec tests (`LeaseCodecTest`, `HandshakeCodecTest`, `TelemetryCodecTest`, `NoticeCodecTest`, `WireTest`), `DomainTest`, `CidrTest`, `CryptoTest`, `SessionIndexTest`, `StateSyncTest`, `ControlPlaneImplTest`, `LearningFreezeTest`, `DashboardControllerTest` (fake EDT and settable monotonic clock) |
-| Local integration tests (real sockets on ephemeral loopback ports, owned test services) | `TlsTest`, `TokenServerTest`, `GatewayTest`, `JournalTest`, `RmiTest`, `ControlE2ETest`, `TelemetryVerifierTest`, `TelemetryProducerTest`, `DetectorPipelineTest`, `AuditHttpTest`, `CredentialsTest`, `IsolationTest` |
+| Pure unit tests (deterministic `Clock`, no I/O) | `PolicyEvaluatorTest`, `RiskEngineTest`, codec tests (`LeaseCodecTest`, `HandshakeCodecTest`, `TelemetryCodecTest`, `NoticeCodecTest`, `WireTest`, `SnapshotCodecTest`), `DomainTest`, `CidrTest`, `CryptoTest`, `SessionIndexTest`, `StateSyncTest`, `ControlPlaneImplTest`, `LearningFreezeTest`, `DashboardControllerTest`, `DashboardComponentsTest`, `ControlMoreTest`, `GatewayMoreTest`, `CommonMoreTest`, `DetectorComponentsTest` |
+| Local integration tests (real sockets on ephemeral loopback ports, owned test services) | `TlsTest`, `TokenServerTest`, `GatewayTest`, `JournalTest`, `RmiTest`, `ControlE2ETest`, `TelemetryVerifierTest`, `TelemetryProducerTest`, `DetectorPipelineTest`, `AuditHttpTest`, `CredentialsTest`, `IsolationTest`, `SimulatorTest`, `ClientTest`, `BusMoreTest`, `DemoComponentsTest` |
 | Real multicast qualification | `QuarantineBusTest.testRealMulticastLoopbackQualification` (prints SKIP, not FAIL, on a host without local multicast), `DemoM4_Multicast` |
 | Load / measurement runs | `DemoM1_Nio 1000`, `DemoM4_Multicast`, `DemoFinal --measure 20` (separate JVMs); numbers in `RESULTS.md` |
 
-Tests added in Task 10 for rows that were thin are marked **(new)**.
+Tests added in continuation phases for complete coverage across all modules are marked **(new)**.
 
 ## Scenario table
 

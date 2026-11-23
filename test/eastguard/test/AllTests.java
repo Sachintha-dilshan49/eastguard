@@ -58,7 +58,16 @@ public final class AllTests {
             QuarantineBusTest.class,
             DemoConfigTest.class,
             IsolationTest.class,
-            SimulatorTest.class);
+            SimulatorTest.class,
+            ClientTest.class,
+            DetectorComponentsTest.class,
+            SnapshotCodecTest.class,
+            BusMoreTest.class,
+            GatewayMoreTest.class,
+            ControlMoreTest.class,
+            DashboardComponentsTest.class,
+            CommonMoreTest.class,
+            DemoComponentsTest.class);
 
     /** Strong reference: java.util.logging only holds loggers weakly, which would drop the level. */
     private static final Logger QUIET = Logger.getLogger("eastguard");
