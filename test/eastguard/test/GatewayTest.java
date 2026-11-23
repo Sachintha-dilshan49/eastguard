@@ -553,7 +553,7 @@ public final class GatewayTest {
     }
 
     public void testSlowReaderIsBackpressuredAndLosesNothing() throws Exception {
-        final int total = 16 << 20;
+        final int total = 32 << 20;
         try (EchoBackend echo = echo(); NioGateway g = gateway(limits(), echo)) {
             GatewaySession s = client("workload-web-01").connect(ep(g), "127.0.0.1", webLease());
             AtomicLong written = new AtomicLong();
@@ -666,6 +666,27 @@ public final class GatewayTest {
                 assertEquals(0, echo.accepted());
                 assertEquals(0, g.stats().accepted()); // the real listener never saw it
             }
+        }
+    }
+
+    public void testGracefulDrainAllowsActiveSessionToFinish() throws Exception {
+        try (EchoBackend echo = echo(); NioGateway g = gateway(limits(), echo)) {
+            GatewaySession active = client("workload-web-01").connect(ep(g), "127.0.0.1", webLease());
+            assertEquals(ReplyStatus.SUCCESS, active.status());
+            await(() -> g.stats().sessions() == 1, "one live session");
+
+            Thread drainThread = Thread.ofPlatform().start(() -> g.drainAndClose(Duration.ofSeconds(10)));
+            await(g::isDraining, "gateway entered draining state");
+
+            // Active session can still send payload and receive echo response while gateway is draining
+            roundTrip(active, "payload during drain");
+
+            // Close the active session, allowing drain to finish naturally
+            active.close();
+
+            drainThread.join(5_000);
+            assertFalse(drainThread.isAlive(), "drainThread should terminate promptly after active session closes");
+            assertEquals(0, g.stats().sessions());
         }
     }
 }

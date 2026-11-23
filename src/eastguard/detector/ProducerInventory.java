@@ -100,11 +100,17 @@ public final class ProducerInventory {
                 throw new IllegalArgumentException("producer " + p.id() + " needs a key of at least 32 bytes");
             }
             k.put(p.id(), key.clone());
+            k.put(p.id() + "/" + p.keyId(), key.clone());
             for (Endpoint e : concat(p.listeners(), p.decoys())) {
                 String prev = owner.put(e, p.id());
                 if (prev != null) {
                     throw new IllegalArgumentException(e + " is claimed by producers " + prev + " and " + p.id());
                 }
+            }
+        }
+        for (Map.Entry<String, byte[]> entry : keys.entrySet()) {
+            if (entry.getKey().contains("/")) {
+                k.put(entry.getKey(), entry.getValue().clone());
             }
         }
         return new ProducerInventory(byId, k);
@@ -196,7 +202,32 @@ public final class ProducerInventory {
     /** MAC key for {@code (producerId, keyId)}, or {@code null} when not trusted. The array must not be modified. */
     byte[] key(String producerId, String keyId) {
         Producer p = producers.get(producerId);
-        return p == null || !p.keyId().equals(keyId) ? null : keys.get(producerId);
+        if (p == null) {
+            return null;
+        }
+        byte[] compound = keys.get(producerId + "/" + keyId);
+        if (compound != null) {
+            return compound;
+        }
+        return p.keyId().equals(keyId) ? keys.get(producerId) : null;
+    }
+
+    /**
+     * Returns an inventory that also trusts {@code (producerId, keyId)} with {@code rawKey},
+     * enabling hitless telemetry key rotation without restarting.
+     */
+    public ProducerInventory withKey(String producerId, String keyId, byte[] rawKey) {
+        Ids.require(producerId, "producer id");
+        Ids.require(keyId, "keyId");
+        if (!producers.containsKey(producerId)) {
+            throw new IllegalArgumentException("unknown producer " + producerId);
+        }
+        if (rawKey == null || rawKey.length < 32) {
+            throw new IllegalArgumentException("key must be at least 32 bytes");
+        }
+        Map<String, byte[]> newKeys = new HashMap<>(keys);
+        newKeys.put(producerId + "/" + keyId, rawKey.clone());
+        return new ProducerInventory(producers, newKeys);
     }
 
     public Producer producer(String id) {

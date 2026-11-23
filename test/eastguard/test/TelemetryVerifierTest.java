@@ -234,4 +234,28 @@ public final class TelemetryVerifierTest {
             assertEquals(1, s.count(Result.OVERSIZE));
         }
     }
+
+    public void testHitlessTelemetryKeyRotation() {
+        byte[] newKey = new byte[32];
+        java.util.Arrays.fill(newKey, (byte) 0x77);
+        ProducerInventory rotated = inventory().withKey("gw-app-02", "tk2", newKey);
+        TelemetryVerifier tv = new TelemetryVerifier("eg-demo", rotated, TelemetryVerifier.Settings.defaults(), clock);
+
+        // Event signed with old key (tk1) is accepted
+        byte[] oldEvent = TelemetryCodec.encode(event("gw-app-02", BOOT, 0, Fixtures.NOW_MS, "web-01", IP, "app-02",
+                GW, Verdict.DENY, ReasonCode.POLICY_DENY, false), GW_KEY);
+        assertEquals(Result.ACCEPTED, tv.verify(oldEvent, oldEvent.length, nanos).result());
+
+        // Event signed with new rotated key (tk2) is also accepted without dropping old events
+        Telemetry tNew = new Telemetry("eg-demo", "gw-app-02", "tk2", BOOT, 1, Fixtures.NOW_MS, 3, "web-01", IP,
+                "app-02", GW.ip(), GW.port(), Verdict.DENY, ReasonCode.POLICY_DENY, false);
+        byte[] newEvent = TelemetryCodec.encode(tNew, newKey);
+        assertEquals(Result.ACCEPTED, tv.verify(newEvent, newEvent.length, nanos).result());
+
+        // Event signed with unknown key (tk3) is rejected
+        Telemetry tBad = new Telemetry("eg-demo", "gw-app-02", "tk3", BOOT, 2, Fixtures.NOW_MS, 3, "web-01", IP,
+                "app-02", GW.ip(), GW.port(), Verdict.DENY, ReasonCode.POLICY_DENY, false);
+        byte[] badEvent = TelemetryCodec.encode(tBad, newKey);
+        assertEquals(Result.UNAUTHENTICATED, tv.verify(badEvent, badEvent.length, nanos).result());
+    }
 }

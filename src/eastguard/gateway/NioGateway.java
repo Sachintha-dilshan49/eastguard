@@ -34,6 +34,7 @@ import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -108,7 +109,7 @@ public final class NioGateway implements AutoCloseable {
     public record Latency(int samples, long p50Micros, long p95Micros, long p99Micros, long maxMicros) {
     }
 
-    private sealed interface Command permits CloseMatching, CloseKeyId, CloseCertificate, CloseAll {
+    private sealed interface Command permits CloseMatching, CloseKeyId, CloseCertificate, CloseAll, StopAccepting {
     }
 
     private record CloseMatching(List<Selector> selectors, ReasonCode reason) implements Command {
@@ -121,6 +122,9 @@ public final class NioGateway implements AutoCloseable {
     }
 
     private record CloseAll(ReasonCode reason) implements Command {
+    }
+
+    private record StopAccepting() implements Command {
     }
 
     private final String serviceId;
@@ -139,6 +143,7 @@ public final class NioGateway implements AutoCloseable {
     private final BlockingQueue<Command> commands;
     private final ConcurrentLinkedQueue<ChannelPair> tasksDone = new ConcurrentLinkedQueue<>();
     private final AtomicBoolean reevaluateRequested = new AtomicBoolean();
+    private volatile boolean draining;
     private DecoyListener decoy;
     private final List<AutoCloseable> owned = new java.util.concurrent.CopyOnWriteArrayList<>();
 
@@ -547,9 +552,9 @@ public final class NioGateway implements AutoCloseable {
         if (serverKey == null || !serverKey.isValid()) {
             return;
         }
-        int want = handshaking.get() < limits.maxHandshakes() ? SelectionKey.OP_ACCEPT : 0;
+        int want = (!draining && handshaking.get() < limits.maxHandshakes()) ? SelectionKey.OP_ACCEPT : 0;
         if (serverKey.interestOps() != want) {
-            serverKey.interestOps(want); // at the limit, new connections wait in the kernel backlog
+            serverKey.interestOps(want); // at the limit or when draining, new connections wait in backlog
         }
     }
 
@@ -877,6 +882,7 @@ public final class NioGateway implements AutoCloseable {
                 case CloseKeyId k -> terminateAll(index.withKeyId(k.keyId()), ReasonCode.REVOKED);
                 case CloseCertificate cc -> terminateAll(index.withCertificate(cc.certSha256()), ReasonCode.REVOKED);
                 case CloseAll a -> terminateAll(index.all(), a.reason());
+                case StopAccepting sa -> handleStopAccepting();
             }
         }
         if (reevaluateRequested.getAndSet(false)) {
@@ -1067,6 +1073,42 @@ public final class NioGateway implements AutoCloseable {
 
     private static long revision(EnforcementView view) {
         return view.snapshot() == null ? 0 : view.snapshot().revision();
+    }
+
+    private void handleStopAccepting() {
+        draining = true;
+        updateAcceptInterest();
+        for (ChannelPair p : new ArrayList<>(pairs)) {
+            if (p.state != State.RELAY && p.state != State.WRITE_REPLY && p.state != State.CLOSED) {
+                if (p.peer != null) {
+                    terminate(p, ReasonCode.NOT_READY);
+                } else {
+                    close(p);
+                }
+            }
+        }
+    }
+
+    public boolean isDraining() {
+        return draining;
+    }
+
+    /**
+     * Gracefully stops accepting new connections, allows active relay sessions up to {@code timeout}
+     * to complete naturally, and then closes the gateway (spec §9.3).
+     */
+    public void drainAndClose(Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        post(new StopAccepting());
+        while (System.nanoTime() < deadline && stats().sessions() > 0) {
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        close();
     }
 
     /** Stops accepting, cancels every connection, and stops the TLS task threads. */
