@@ -3,7 +3,7 @@
 # If the execution policy blocks it:  powershell -ExecutionPolicy Bypass -File scripts\sources.ps1
 # Output is stable across runs: forward slashes, ordinal sort, LF line endings, UTF-8 without BOM.
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $prefix = $root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 
 $files = New-Object System.Collections.Generic.List[string]

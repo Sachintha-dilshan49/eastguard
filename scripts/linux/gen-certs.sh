@@ -3,7 +3,7 @@
 # Run from anywhere: ./scripts/gen-certs.sh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="$ROOT/keys"
 VALIDITY_DAYS=365
 TEST_FIXTURES=false

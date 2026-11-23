@@ -48,7 +48,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3
 
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $logs = Join-Path $root 'logs'
 $journal = Join-Path $root 'journal\demo-control.journal'
 $script:started = New-Object System.Collections.ArrayList
@@ -92,7 +92,7 @@ function Assert-Prerequisites {
     foreach ($f in @('out\eastguard\demos\Launch.class', 'out\eastguard\demos\DemoFinal.class',
             'out\eastguard\demos\HealthProbe.class')) {
         if (-not (Test-Path -LiteralPath (Join-Path $root $f))) {
-            throw "$f not found: build first (.\scripts\sources.ps1, then  javac --release 21 -d out `"@sources.txt`")"
+            throw "$f not found: build first (.\scripts\windows\sources.ps1, then  javac --release 21 -d out `"@sources.txt`")"
         }
     }
     foreach ($f in @('truststore.p12', 'control.p12', 'detector.p12', 'tokensvc.p12', 'gateway-app-02.p12',
@@ -104,12 +104,12 @@ function Assert-Prerequisites {
         if (-not (Test-Path -LiteralPath (Join-Path $root "keys\$f"))) { $missing += "keys\$f" }
     }
     if ($missing.Count -gt 0) {
-        $msg = "missing: $($missing -join ', ').`n  On a fresh machine run  .\scripts\gen-certs.ps1  and  .\scripts\gen-credentials.ps1."
+        $msg = "missing: $($missing -join ', ').`n  On a fresh machine run  .\scripts\windows\gen-certs.ps1  and  .\scripts\windows\gen-credentials.ps1."
         if (@($missing | Where-Object { $_ -match 'app-03' }).Count -eq $missing.Count) {
             $msg += "`n  On a key set made before the second gateway existed, add only its material:" +
-                "`n    .\scripts\gen-certs.ps1 -AddComponent gateway-app-03" +
-                "`n    .\scripts\gen-credentials.ps1 -Add gw-app-03:GATEWAY" +
-                "`n    .\scripts\gen-credentials.ps1 -TelemetryKeys -TelemetryProducers gw-app-03"
+                "`n    .\scripts\windows\gen-certs.ps1 -AddComponent gateway-app-03" +
+                "`n    .\scripts\windows\gen-credentials.ps1 -Add gw-app-03:GATEWAY" +
+                "`n    .\scripts\windows\gen-credentials.ps1 -TelemetryKeys -TelemetryProducers gw-app-03"
         }
         throw $msg
     }

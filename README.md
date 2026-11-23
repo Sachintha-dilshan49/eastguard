@@ -52,10 +52,13 @@ Java 21, JDK only: no Maven, Gradle or external libraries. Full specification: [
 Code layout (spec §8): `src/eastguard/{common,client,gateway,tokensvc,detector,bus,control,dashboard,handlers,demos}`,
 tests in `test/eastguard/test`.
 
-## Run guide (fresh Windows machine)
+## Run guide (Windows & Linux)
 
-Everything below runs in **Windows PowerShell 5.1** (or PowerShell 7) from the project root. Steps 1–5 are
-needed once; step 3 again after pulling changes.
+Scripts are organized into platform-specific subdirectories:
+- **Linux / macOS (Bash)**: `./scripts/linux/<script>.sh`
+- **Windows (PowerShell)**: `.\scripts\windows\<script>.ps1`
+
+Steps 1–5 are needed once; step 3 again after pulling changes.
 
 ### 1. Check the JDK
 
@@ -81,16 +84,30 @@ cd eastguard
 
 ### 3. Build
 
+**Windows (PowerShell):**
 ```powershell
-.\scripts\sources.ps1                      # writes sources.txt: every .java under src and test
+.\scripts\windows\sources.ps1              # writes sources.txt: every .java under src and test
 javac --release 21 -d out "@sources.txt"   # quote "@sources.txt": unquoted, PowerShell splats it
+```
+
+**Linux / macOS (Bash):**
+```bash
+./scripts/linux/sources.sh
+javac --release 21 -d out "@sources.txt"
 ```
 
 ### 4. Demo keys and certificates
 
+**Windows (PowerShell):**
 ```powershell
-.\scripts\gen-certs.ps1          # demo CA, component/workload/console certificates, lease and notice signers -> keys\
-.\scripts\gen-credentials.ps1    # per-principal API secrets (keys\api\), their digests, telemetry HMAC keys
+.\scripts\windows\gen-certs.ps1          # demo CA, component/workload/console certificates, lease and notice signers -> keys\
+.\scripts\windows\gen-credentials.ps1    # per-principal API secrets (keys\api\), their digests, telemetry HMAC keys
+```
+
+**Linux / macOS (Bash):**
+```bash
+./scripts/linux/gen-certs.sh
+./scripts/linux/gen-credentials.sh
 ```
 
 Both use JDK tools only and write to `keys\`, which is git-ignored. Passwords and secrets are generated, kept in
@@ -99,13 +116,19 @@ files readable only by the current user, and never printed or passed on a comman
 
 ### 5. Bootstrap the demo journal
 
+**Windows (PowerShell):**
 ```powershell
-.\scripts\reset-demo.ps1
+.\scripts\windows\reset-demo.ps1
+```
+
+**Linux / macOS (Bash):**
+```bash
+./scripts/linux/reset-demo.sh
 ```
 
 This is the explicit administrator bootstrap (spec §9.1). It writes revision 1 of `journal\demo-control.journal`:
 services `app-02` and `app-03`, approved edges `web-01 -> app-02` and `web-01 -> app-03`, ENFORCE, deny by default.
-Run it again at any time to start over; it refuses while a demo control plane is running. (`run-demo.ps1` runs it
+Run it again at any time to start over; it refuses while a demo control plane is running. (`run-demo` runs it
 by itself when the journal does not exist.)
 
 ### 6. Run all tests
@@ -142,8 +165,14 @@ java -cp out eastguard.demos.DemoM5_Rmi          # RMI: audited edit, conflict, 
 
 Terminal 1 starts every component as its own JVM in the spec §9.2 order and waits until each one is ready:
 
+**Windows (PowerShell):**
 ```powershell
-.\scripts\run-demo.ps1            # add -Reset to start from a fresh journal
+.\scripts\windows\run-demo.ps1            # add -Reset to start from a fresh journal
+```
+
+**Linux / macOS (Bash):**
+```bash
+./scripts/linux/run-demo.sh               # add --reset to start from a fresh journal
 ```
 
 ```
@@ -179,18 +208,24 @@ java -cp out eastguard.demos.DemoFinal
 The server-side reason for each step is read from `logs\`. `DemoFinal --measure 20` also times containment and
 connects across the processes. Or let terminal 1 do it all and stop afterwards:
 
+**Windows (PowerShell):**
 ```powershell
-.\scripts\run-demo.ps1 -Reset -RunFinal                              # exit code = DemoFinal's
-.\scripts\run-demo.ps1 -Reset -RunFinal -FinalArgs '--measure','20'
+.\scripts\windows\run-demo.ps1 -Reset -RunFinal                              # exit code = DemoFinal's
+.\scripts\windows\run-demo.ps1 -Reset -RunFinal -FinalArgs '--measure','20'
+```
+
+**Linux / macOS (Bash):**
+```bash
+./scripts/linux/run-demo.sh --reset --run-final
 ```
 
 `DemoFinal` needs a fresh state: to run it again, press **Ctrl+C** in terminal 1 and start
-`.\scripts\run-demo.ps1 -Reset`. Ctrl+C (or any component failing to start or exiting) stops every component
+`.\scripts\windows\run-demo.ps1 -Reset` (or `./scripts/linux/run-demo.sh --reset`). Ctrl+C (or any component failing to start or exiting) stops every component
 through its shutdown hooks, in reverse order. Logs stay in `logs\` (git-ignored) until the next reset.
 
 ### 9. Open the dashboard
 
-With `run-demo.ps1` running, in another terminal:
+With `run-demo` running, in another terminal:
 
 ```powershell
 java -cp out eastguard.dashboard.DashboardApp --config config/dashboard.properties.example
@@ -205,12 +240,12 @@ shows labelled fixture scenarios with no network.
 
 | Symptom | Fix |
 |---------|-----|
-| `ports already in use: ...` from `run-demo.ps1` | another demo, a `DemoM*` or a leftover component still runs. Find it with `Get-NetTCPConnection -LocalPort 9002` / `Get-NetUDPEndpoint -LocalPort 5514` |
-| `missing: keys\gateway-app-03.p12, ...` | a key set from before the second gateway: run the three commands `run-demo.ps1` prints |
-| `the demo state is not fresh` from `DemoFinal` | Ctrl+C in terminal 1, then `.\scripts\run-demo.ps1 -Reset` |
-| `javac: no source files` | `"@sources.txt"` was not quoted, or `.\scripts\sources.ps1` was not run |
+| `ports already in use: ...` from `run-demo` | another demo, a `DemoM*` or a leftover component still runs. Find it with `Get-NetTCPConnection -LocalPort 9002` / `Get-NetUDPEndpoint -LocalPort 5514` |
+| `missing: keys\gateway-app-03.p12, ...` | a key set from before the second gateway: run the three commands `run-demo` prints |
+| `the demo state is not fresh` from `DemoFinal` | Ctrl+C in terminal 1, then restart with `-Reset` |
+| `javac: no source files` | `"@sources.txt"` was not quoted, or sources script was not run |
 | a script "cannot be loaded because running scripts is disabled" | `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` |
-| step 4 says the detector suppressed the proposal | the detector's restart guard (10 s) or 60 s cooldown; `run-demo.ps1` waits out the guard, a reset clears the cooldown |
+| step 4 says the detector suppressed the proposal | the detector's restart guard (10 s) or 60 s cooldown; `run-demo` waits out the guard, a reset clears the cooldown |
 
 ---
 
@@ -219,7 +254,7 @@ shows labelled fixture scenarios with no network.
 ## Demo keys and certificates
 
 ```powershell
-.\scripts\gen-certs.ps1            # writes keys\ (git-ignored); -Force to regenerate
+.\scripts\windows\gen-certs.ps1            # writes keys\ (git-ignored); -Force to regenerate
 ```
 
 This uses JDK `keytool` only. It finds keytool via `JAVA_HOME`, then PATH, then the active `java`. It creates a
@@ -233,7 +268,7 @@ untrusted CA, the Ed25519 lease-signing key `lease-k1`, and a separate Ed25519 c
 On a key set made before Task 8, add only the notice signer; nothing else is touched:
 
 ```powershell
-.\scripts\gen-certs.ps1 -AddControlSigner     # refuses to replace an existing signer without -Force
+.\scripts\windows\gen-certs.ps1 -AddControlSigner     # refuses to replace an existing signer without -Force
 ```
 
 Passwords never appear on a command line or in the output:
@@ -290,7 +325,7 @@ fixture; a standalone gateway syncs its state from the control plane. See `docs/
 ## Control plane and M5 demo
 
 ```powershell
-.\scripts\gen-credentials.ps1      # once: per-principal API secrets in keys\api\, digests in keys\control-credentials.properties
+.\scripts\windows\gen-credentials.ps1      # once: per-principal API secrets in keys\api\, digests in keys\control-credentials.properties
 java -cp out eastguard.demos.DemoM5_Rmi
 ```
 
@@ -328,7 +363,7 @@ replays the journal at startup and refuses to start on a corrupt record or a rev
 client certificates on both the registry and the object port. Every call carries a per-principal API
 credential, checked against a role (VIEWER, OPERATOR, ADMIN, GATEWAY, ISSUER, DETECTOR).
 
-Rotate or revoke a credential with `.\scripts\gen-credentials.ps1 -Rotate <name>` / `-Retire <name>` /
+Rotate or revoke a credential with `.\scripts\windows\gen-credentials.ps1 -Rotate <name>` / `-Retire <name>` /
 `-Revoke <name>`; the control plane reloads the file without a restart.
 
 Gateways and the token service admit nothing until their first successful sync, and treat state as stale 5 s
@@ -350,8 +385,8 @@ that leave every score unchanged. It exits 0 when every check passes.
 Running the detector for real needs its certificate and the per-producer HMAC keys:
 
 ```powershell
-.\scripts\gen-certs.ps1 -AddComponent detector   # keys\detector.p12 from the existing demo CA
-.\scripts\gen-credentials.ps1 -TelemetryKeys     # keys\telemetry\gw-app-02.key, tokensvc.key (kept if present)
+.\scripts\windows\gen-certs.ps1 -AddComponent detector   # keys\detector.p12 from the existing demo CA
+.\scripts\windows\gen-credentials.ps1 -TelemetryKeys     # keys\telemetry\gw-app-02.key, tokensvc.key (kept if present)
 java -cp out eastguard.detector.ThreatDetector --config config/detector.properties.example
 ```
 
@@ -389,8 +424,8 @@ The console has its own client certificate and API credentials. Both scripts add
 existing keys:
 
 ```powershell
-.\scripts\gen-certs.ps1 -AddConsole      # keys\console.p12: clientAuth only, SAN urn:eastguard:console:dashboard
-.\scripts\gen-credentials.ps1 -Add console-viewer:VIEWER,console-operator:OPERATOR,console-admin:ADMIN
+.\scripts\windows\gen-certs.ps1 -AddConsole      # keys\console.p12: clientAuth only, SAN urn:eastguard:console:dashboard
+.\scripts\windows\gen-credentials.ps1 -Add console-viewer:VIEWER,console-operator:OPERATOR,console-admin:ADMIN
 ```
 
 A fresh `gen-certs.ps1` / `gen-credentials.ps1` run creates them as well.

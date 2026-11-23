@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 JOURNAL="${ROOT}/journal/demo-control.journal"
 LOGS="${ROOT}/logs"
 
@@ -19,13 +19,13 @@ done
 command -v java >/dev/null 2>&1 || { echo "java not found on PATH: install JDK 21+" >&2; exit 1; }
 
 if [ ! -f "${ROOT}/out/eastguard/control/ControlPlaneImpl.class" ]; then
-    echo "out/ has no build: run ./scripts/sources.sh and javac --release 21 -d out \"@sources.txt\" first" >&2
+    echo "out/ has no build: run ./scripts/linux/sources.sh and javac --release 21 -d out \"@sources.txt\" first" >&2
     exit 1
 fi
 
 for f in keys/lease-k1.cer keys/control-k1.cer keys/control-credentials.properties; do
     if [ ! -f "${ROOT}/${f}" ]; then
-        echo "${f} not found: run ./scripts/gen-certs.sh and ./scripts/gen-credentials.sh first" >&2
+        echo "${f} not found: run ./scripts/linux/gen-certs.sh and ./scripts/linux/gen-credentials.sh first" >&2
         exit 1
     fi
 done
@@ -49,3 +49,4 @@ java -cp out eastguard.control.ControlPlaneImpl bootstrap \
     --actor admin --reason 'demo reset: deny-by-default policy for app-02 and app-03'
 
 echo "demo reset complete"
+

@@ -70,7 +70,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3
 
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not $OutDir) { $OutDir = Join-Path $root 'keys' }
 $OutDir = [IO.Path]::GetFullPath($OutDir)
 $caDir = Join-Path $OutDir 'ca'

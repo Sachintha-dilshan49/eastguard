@@ -23,18 +23,18 @@ param([switch]$KeepLogs)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3
 
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $journal = Join-Path $root 'journal\demo-control.journal'
 $logs = Join-Path $root 'logs'
 
 $java = Get-Command java -ErrorAction SilentlyContinue
 if (-not $java) { throw 'java not found on PATH: install JDK 21 and open a new terminal' }
 if (-not (Test-Path -LiteralPath (Join-Path $root 'out\eastguard\control\ControlPlaneImpl.class'))) {
-    throw 'out\ has no build: run .\scripts\sources.ps1 and  javac --release 21 -d out "@sources.txt"  first'
+    throw 'out\ has no build: run .\scripts\windows\sources.ps1 and  javac --release 21 -d out "@sources.txt"  first'
 }
 foreach ($f in @('keys\lease-k1.cer', 'keys\control-k1.cer', 'keys\control-credentials.properties')) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $f))) {
-        throw "$f not found: run .\scripts\gen-certs.ps1 and .\scripts\gen-credentials.ps1 first"
+        throw "$f not found: run .\scripts\windows\gen-certs.ps1 and .\scripts\windows\gen-credentials.ps1 first"
     }
 }
 

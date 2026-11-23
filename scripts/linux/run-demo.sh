@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 LOGS="${ROOT}/logs"
 JOURNAL="${ROOT}/journal/demo-control.journal"
 
@@ -51,7 +51,7 @@ fi
 assert_prerequisites() {
     for f in out/eastguard/demos/Launch.class out/eastguard/demos/DemoFinal.class out/eastguard/demos/HealthProbe.class; do
         if [ ! -f "${ROOT}/${f}" ]; then
-            echo "${f} not found: build first (./scripts/sources.sh && javac --release 21 -d out \"@sources.txt\")" >&2
+            echo "${f} not found: build first (./scripts/linux/sources.sh && javac --release 21 -d out \"@sources.txt\")" >&2
             exit 1
         fi
     done
@@ -70,7 +70,7 @@ assert_prerequisites() {
 
     if [ ${#missing[@]} -gt 0 ]; then
         echo "missing keys: ${missing[*]}" >&2
-        echo "Run ./scripts/gen-certs.sh and ./scripts/gen-credentials.sh first." >&2
+        echo "Run ./scripts/linux/gen-certs.sh and ./scripts/linux/gen-credentials.sh first." >&2
         exit 1
     fi
 }
@@ -183,7 +183,7 @@ start_component() {
 cd "${ROOT}"
 
 if [ "${RESET}" = true ] || [ ! -f "${JOURNAL}" ]; then
-    ./scripts/reset-demo.sh
+    "${SCRIPT_DIR}/reset-demo.sh"
 fi
 
 assert_prerequisites

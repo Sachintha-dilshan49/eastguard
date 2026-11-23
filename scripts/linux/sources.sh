@@ -3,7 +3,7 @@
 # Run from the project root: ./scripts/sources.sh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 find src test -type f -name "*.java" | LC_ALL=C sort > sources.txt

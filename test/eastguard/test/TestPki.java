@@ -63,12 +63,14 @@ final class TestPki {
             Files.createDirectories(DIR.getParent());
             boolean isWindows = System.getProperty("os.name", "").toLowerCase().contains("win");
             ProcessBuilder pb;
-            if (!isWindows && Files.isRegularFile(Path.of("scripts", "gen-certs.sh"))) {
-                pb = new ProcessBuilder("bash", Path.of("scripts", "gen-certs.sh").toString(),
+            if (!isWindows) {
+                Path script = Path.of("scripts", "linux", "gen-certs.sh");
+                pb = new ProcessBuilder("bash", script.toString(),
                         "-OutDir", DIR.toString(), "-TestFixtures", "-Force");
             } else {
+                Path script = Path.of("scripts", "windows", "gen-certs.ps1");
                 pb = new ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
-                        "Bypass", "-File", Path.of("scripts", "gen-certs.ps1").toString(),
+                        "Bypass", "-File", script.toString(),
                         "-OutDir", DIR.toString(), "-TestFixtures", "-Force");
             }
             pb.environment().keySet().removeIf(k -> k.toUpperCase().startsWith("EASTGUARD_"));

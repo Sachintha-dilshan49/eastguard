@@ -3,7 +3,7 @@
 # Run from anywhere: ./scripts/gen-credentials.sh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="$ROOT/keys"
 FORCE=false
 TELEMETRY_KEYS=false
